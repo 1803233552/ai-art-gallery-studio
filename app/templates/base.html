@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_title|default('浅夜の梦') }}{% endblock %}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>{{ site_icon|default('✨') }}</text></svg>">
+    <link rel="stylesheet" href="/static/css/common.css">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    {% block content %}{% endblock %}
+
+    <script src="/static/js/common.js"></script>
+    <!-- 公告弹窗组件（无外部依赖，内置轻量 Markdown 渲染，热更新） -->
+    <script>
+    (function(){
+        var page='{{ ann_page|default("home") }}';
+        var today=new Date().toISOString().slice(0,10);
+        var key='ann_dismiss_'+page+'_'+today;
+        if(localStorage.getItem(key))return;
+
+        /* ---- 内置轻量 Markdown → HTML（无需外部库） ---- */
+        function mdToHtml(md){
+            var lines=md.split('\n');
+            var html='';
+            var inUl=false,inOl=false;
+            function closeList(){
+                if(inUl){html+='</ul>';inUl=false;}
+                if(inOl){html+='</ol>';inOl=false;}
+            }
+            function inlineRender(t){
+                /* 转义 XSS */
+                t=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                /* 链接 [text](url) */
+                t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+                /* 行内代码 */
+                t=t.replace(/`([^`]+)`/g,'<code>$1</code>');
+                /* 粗体 **text** 或 __text__ */
+                t=t.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+                t=t.replace(/__(.+?)__/g,'<strong>$1</strong>');
+                /* 斜体 *text* 或 _text_ */
+                t=t.replace(/\*(.+?)\*/g,'<em>$1</em>');
+                t=t.replace(/_(.+?)_/g,'<em>$1</em>');
+                return t;
+            }
+            for(var i=0;i<lines.length;i++){
+                var l=lines[i];
+                /* 标题 */
+                var hm=l.match(/^(#{1,3})\s+(.+)/);
+                if(hm){closeList();var lv=hm[1].length;html+='<h'+lv+'>'+inlineRender(hm[2])+'</h'+lv+'>';continue;}
+                /* 水平线 */
+                if(/^(-{3,}|\*{3,}|_{3,})$/.test(l.trim())){closeList();html+='<hr>';continue;}
+                /* 无序列表 */
+                var ulm=l.match(/^[\*\-]\s+(.+)/);
+                if(ulm){if(!inUl){if(inOl){html+='</ol>';inOl=false;}html+='<ul>';inUl=true;}html+='<li>'+inlineRender(ulm[1])+'</li>';continue;}
+                /* 有序列表 */
+                var olm=l.match(/^\d+\.\s+(.+)/);
+                if(olm){if(!inOl){if(inUl){html+='</ul>';inUl=false;}html+='<ol>';inOl=true;}html+='<li>'+inlineRender(olm[1])+'</li>';continue;}
+                /* 空行 */
+                if(l.trim()===''){closeList();html+='<br>';continue;}
+                /* 普通段落 */
+                closeList();
+                html+='<p>'+inlineRender(l)+'</p>';
+            }
+            closeList();
+            return html;
+        }
+
+        /* ---- 渲染并展示弹窗 ---- */
+        function showAnn(content,k){
+            /* 如果已存在弹窗则不重复 */
+            if(document.querySelector('.ann-overlay'))return;
+            var html=mdToHtml(content);
+            var overlay=document.createElement('div');
+            overlay.className='ann-overlay';
+            overlay.innerHTML=
+                '<div class="ann-box">'
+                  +'<div class="ann-header"><span>📢 公告</span><button class="ann-close" id="annClose">✕</button></div>'
+                  +'<div class="ann-body">'+html+'</div>'
+                  +'<label class="ann-dismiss"><input type="checkbox" id="annDismiss"> 今日不再显示</label>'
+                +'</div>';
+            document.body.appendChild(overlay);
+            function close(){
+                if(document.getElementById('annDismiss').checked)localStorage.setItem(k,'1');
+                overlay.remove();
+            }
+            overlay.querySelector('#annClose').addEventListener('click',close);
+            overlay.addEventListener('click',function(e){if(e.target===overlay)close();});
+        }
+
+        /* ---- 从 API 拉取公告（热更新） ---- */
+        fetch('/api/announcement?page='+encodeURIComponent(page))
+            .then(function(r){return r.json();})
+            .then(function(d){
+                if(!d.enabled||!d.content||!d.content.trim())return;
+                /* DOMContentLoaded 后再插入，避免 body 不存在 */
+                if(document.readyState==='loading'){
+                    document.addEventListener('DOMContentLoaded',function(){showAnn(d.content,key);});
+                }else{
+                    showAnn(d.content,key);
+                }
+            })
+            .catch(function(){/* 网络失败静默忽略 */});
+    })();
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

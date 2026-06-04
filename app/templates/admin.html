@@ -1,0 +1,1287 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<!-- Navigation -->
+<header class="nav">
+    <div class="nav-in">
+        <a class="logo" href="/"><span class="lo-i">{{ site_icon }}</span><span class="lo-t">{{ site_name }}</span></a>
+        <div class="nav-actions">
+            <button class="btn-icon" onclick="toggleDark()"><span class="theme-toggle-icon">🌙</span></button>
+            <a href="/gallery" class="btn">图片广场</a>
+        </div>
+    </div>
+</header>
+
+<style>
+    body {
+        background: var(--bg);
+        color: var(--text);
+    }
+
+    /* 登录表单 */
+    #login-section {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: calc(100vh - 200px);
+    }
+
+    #login-form {
+        background: var(--bg-card-solid);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 40px 32px;
+        width: 360px;
+        box-shadow: var(--shadow-lg);
+    }
+
+    #login-form h2 {
+        text-align: center;
+        margin-bottom: 28px;
+        font-size: 1.4rem;
+        color: var(--text);
+    }
+
+    #login-form .form-group {
+        margin-bottom: 16px;
+    }
+
+    #login-form label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.9rem;
+        color: var(--text-soft);
+    }
+
+    #login-form input {
+        width: 100%;
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg-soft);
+        color: var(--text);
+        font-size: 0.95rem;
+        box-sizing: border-box;
+    }
+
+    #login-form input:focus {
+        outline: none;
+        border-color: var(--primary);
+    }
+
+    #login-form button {
+        width: 100%;
+        padding: 12px;
+        background: var(--primary);
+        color: #fff;
+        border: none;
+        border-radius: var(--radius-sm);
+        font-size: 1rem;
+        cursor: pointer;
+        margin-top: 8px;
+    }
+
+    #login-form button:hover {
+        opacity: .88;
+    }
+
+    .login-error {
+        color: #ff3b30;
+        font-size: 0.85rem;
+        text-align: center;
+        margin-top: 12px;
+    }
+
+    /* 权限提示 */
+    #no-access {
+        display: none;
+        text-align: center;
+        padding: 80px 20px;
+    }
+
+    #no-access h2 {
+        color: #ff3b30;
+        margin-bottom: 12px;
+    }
+
+    #no-access p {
+        color: var(--text-soft);
+    }
+
+    /* 管理员内容 */
+    #admin-content {
+        display: none;
+        padding: 24px;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    #admin-content h1 {
+        margin-bottom: 24px;
+        font-size: 1.5rem;
+    }
+
+    /* 统计卡片 */
+    .stats-row {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 28px;
+        flex-wrap: wrap;
+    }
+
+    .stat-card {
+        background: var(--bg-card-solid);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 18px 24px;
+        flex: 1;
+        min-width: 160px;
+    }
+
+    .stat-card .stat-label {
+        font-size: 0.8rem;
+        color: var(--text-soft);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 6px;
+    }
+
+    .stat-card .stat-value {
+        font-size: 1.6rem;
+        font-weight: 600;
+        color: var(--text);
+    }
+
+    /* 表格区域 */
+    .table-container {
+        background: var(--bg-card-solid);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    .table-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .table-header span {
+        font-size: 0.9rem;
+        color: var(--text-soft);
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    thead tr {
+        background: var(--bg-soft);
+    }
+
+    thead th {
+        padding: 12px 16px;
+        text-align: left;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--text-soft);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 1px solid var(--border);
+    }
+
+    tbody tr {
+        border-bottom: 1px solid var(--border);
+        transition: background 0.15s;
+    }
+
+    tbody tr:nth-child(even) {
+        background: rgba(255,255,255,0.02);
+    }
+
+    tbody tr:hover {
+        background: rgba(108, 92, 231, 0.08);
+    }
+
+    tbody tr:last-child {
+        border-bottom: none;
+    }
+
+    tbody td {
+        padding: 12px 16px;
+        font-size: 0.9rem;
+        vertical-align: middle;
+    }
+
+    .thumb-img {
+        width: 64px;
+        height: 64px;
+        object-fit: cover;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        cursor: pointer;
+        transition: transform 0.15s;
+    }
+
+    .thumb-img:hover {
+        transform: scale(1.1);
+    }
+
+    .prompt-cell {
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-soft);
+        font-size: 0.85rem;
+    }
+
+    .time-cell {
+        color: var(--text-soft);
+        font-size: 0.85rem;
+        white-space: nowrap;
+    }
+
+    .btn-preview {
+        padding: 5px 12px;
+        background: #3498db;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+    .btn-preview:hover {
+        background: #2980b9;
+    }
+
+    .btn-delete {
+        padding: 5px 12px;
+        background: #c0392b;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+    .btn-delete:hover {
+        background: #a93226;
+    }
+
+    /* 分页器 */
+    .pagination {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+        padding: 20px;
+        border-top: 1px solid var(--border);
+    }
+
+    .pagination button {
+        padding: 8px 14px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-soft);
+        color: var(--text);
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .pagination button:hover:not(:disabled) {
+        border-color: var(--primary);
+        color: var(--primary);
+    }
+
+    .pagination button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
+    .pagination .page-info {
+        padding: 8px 16px;
+        font-size: 0.85rem;
+        color: var(--text-soft);
+    }
+
+    /* 预览弹窗 → 详情弹窗 */
+    #preview-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.85);
+        z-index: 1000;
+        justify-content: center;
+        align-items: center;
+        backdrop-filter: blur(4px);
+    }
+
+    #preview-modal.show {
+        display: flex;
+    }
+
+    .admin-detail {
+        display: flex;
+        background: var(--bg-card-solid);
+        border-radius: 12px;
+        overflow: hidden;
+        max-width: 92vw;
+        max-height: 90vh;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+
+    .admin-detail-img {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #000;
+        max-width: 60%;
+    }
+
+    .admin-detail-img img {
+        max-width: 100%;
+        max-height: 85vh;
+        object-fit: contain;
+    }
+
+    .admin-detail-side {
+        width: 340px;
+        flex-shrink: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+    }
+
+    .admin-detail-meta {
+        font-size: 13px;
+        color: var(--text-soft);
+        margin-bottom: 12px;
+        line-height: 1.8;
+    }
+
+    .admin-detail-side h4 {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+
+    .admin-comment-list {
+        flex: 1;
+        overflow-y: auto;
+        max-height: 50vh;
+    }
+
+    .ac-item {
+        display: flex;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+    }
+
+    .ac-item:last-child { border-bottom: none; }
+
+    .ac-body { flex: 1; min-width: 0; }
+
+    .ac-head {
+        display: flex;
+        gap: 6px;
+        align-items: baseline;
+        margin-bottom: 2px;
+    }
+
+    .ac-nick { font-weight: 600; font-size: 12px; }
+    .ac-time { font-size: 11px; color: var(--text-mute); }
+    .ac-text { color: var(--text-soft); line-height: 1.5; word-break: break-word; }
+    .ac-pinned { background: rgba(255,149,0,.08); border-radius: 6px; padding: 6px; margin: -4px -4px 4px; }
+
+    .ac-actions {
+        display: flex;
+        gap: 4px;
+        margin-top: 4px;
+    }
+
+    .ac-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-mute);
+        padding: 2px 4px;
+        border-radius: 4px;
+        transition: color .2s;
+    }
+
+    .ac-btn:hover { color: var(--primary); }
+    .ac-btn.ac-del-btn:hover { color: #ff3b30; }
+
+    /* 搜索栏 */
+    .admin-search {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .admin-search-input {
+        padding: 6px 12px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg-soft);
+        color: var(--text);
+        font-size: 13px;
+        width: 280px;
+    }
+
+    .admin-search-input:focus {
+        outline: none;
+        border-color: var(--primary);
+    }
+
+    @media (max-width: 768px) {
+        .admin-detail { flex-direction: column; }
+        .admin-detail-img { max-width: 100%; }
+        .admin-detail-side { width: 100%; }
+        .admin-search { flex-wrap: wrap; }
+        .admin-search-input { width: 180px; }
+    }
+
+    #preview-modal .close-btn {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: #fff;
+        font-size: 1.2rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s;
+        z-index: 10;
+    }
+
+    #preview-modal .close-btn:hover {
+        background: rgba(255,255,255,0.2);
+    }
+
+    /* 确认弹窗 */
+    #confirm-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.6);
+        z-index: 1001;
+        justify-content: center;
+        align-items: center;
+        backdrop-filter: blur(4px);
+    }
+
+    #confirm-modal.show {
+        display: flex;
+    }
+
+    .confirm-box {
+        background: var(--bg-card-solid);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 28px 32px;
+        text-align: center;
+        max-width: 360px;
+    }
+
+    .confirm-box h3 {
+        margin-bottom: 12px;
+    }
+
+    .confirm-box p {
+        color: var(--text-soft);
+        margin-bottom: 24px;
+        font-size: 0.95rem;
+    }
+
+    .confirm-box .btn-row {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+    }
+
+    .confirm-box .btn-cancel {
+        padding: 8px 20px;
+        background: var(--bg-soft);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.9rem;
+    }
+
+    .confirm-box .btn-confirm-delete {
+        padding: 8px 20px;
+        background: #c0392b;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.9rem;
+    }
+
+    .loading-overlay {
+        display: none;
+        text-align: center;
+        padding: 40px;
+        color: var(--text-soft);
+    }
+
+    .loading-overlay.show {
+        display: block;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--text-soft);
+    }
+
+    .empty-state p {
+        margin-bottom: 16px;
+    }
+
+    /* Tab 切换 */
+    .admin-tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 20px;
+    }
+    .admin-tab {
+        padding: 8px 20px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-soft);
+        color: var(--text);
+        font-size: 14px;
+        cursor: pointer;
+        transition: all .2s;
+        font-family: inherit;
+    }
+    .admin-tab:hover { border-color: var(--primary); color: var(--primary); }
+    .admin-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    /* 用户状态标签 */
+    .status-normal { color: #34c759; font-weight: 600; font-size: 13px; }
+    .status-banned { color: #ff3b30; font-weight: 600; font-size: 13px; }
+    .ban-reason-cell { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-mute); font-size: 13px; }
+    .btn-ban { padding: 5px 12px; background: #ff9500; color: #fff; border: none; border-radius: 6px; font-size: .8rem; cursor: pointer; transition: background .15s; }
+    .btn-ban:hover { background: #e08600; }
+    .btn-unban { padding: 5px 12px; background: #34c759; color: #fff; border: none; border-radius: 6px; font-size: .8rem; cursor: pointer; transition: background .15s; }
+    .btn-unban:hover { background: #2db84e; }
+
+    #ban-modal.show { display: flex; }
+</style>
+
+<!-- 登录表单 -->
+<div id="login-section">
+    <form id="login-form">
+        <h2>🔐 管理员登录</h2>
+        <div class="form-group">
+            <label for="username">用户名</label>
+            <input type="text" id="username" placeholder="请输入管理员用户名" required autocomplete="username">
+        </div>
+        <div class="form-group">
+            <label for="password">密码</label>
+            <input type="password" id="password" placeholder="请输入密码" required autocomplete="current-password">
+        </div>
+        <button type="submit">登 录</button>
+        <div class="login-error" id="login-error" style="display:none;"></div>
+    </form>
+</div>
+
+<!-- 无权限提示 -->
+<div id="no-access">
+    <h2>⚠️ 无权访问</h2>
+    <p>您当前登录的账号不是管理员，无法访问此页面。</p>
+    <p style="margin-top:12px;"><a href="/" style="color:var(--primary);">返回首页</a></p>
+</div>
+
+<!-- 管理员内容 -->
+<div id="admin-content">
+    <h1>🖥️ 管理后台</h1>
+
+    <!-- Tab 切换 -->
+    <div class="admin-tabs">
+        <button class="admin-tab active" onclick="switchTab('images')">📷 图片管理</button>
+        <button class="admin-tab" onclick="switchTab('users')">👤 用户管理</button>
+    </div>
+
+    <!-- ========== 图片管理面板 ========== -->
+    <div id="panel-images">
+
+    <!-- 统计卡片 -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-label">当前页</div>
+            <div class="stat-value" id="stat-page">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">本页数量</div>
+            <div class="stat-value" id="stat-count">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">总记录数</div>
+            <div class="stat-value" id="stat-total">-</div>
+        </div>
+    </div>
+
+    <!-- 图片管理表格 -->
+    <div class="table-container">
+        <div class="table-header">
+            <span>📷 图片管理</span>
+            <div class="admin-search">
+                <input type="text" id="admin-search-input" placeholder="搜索 ID / 用户名 / 提示词 / 模型..." class="admin-search-input">
+                <button onclick="doAdminSearch()" class="btn-preview">🔍</button>
+                <button onclick="clearAdminSearch()" class="btn-cancel" style="font-size:.8rem;padding:5px 10px;">清除</button>
+            </div>
+            <span id="table-count">加载中...</span>
+        </div>
+
+        <div class="loading-overlay" id="table-loading">加载中...</div>
+
+        <div class="empty-state" id="empty-state" style="display:none;">
+            <p>暂无图片数据</p>
+        </div>
+
+        <div id="table-wrapper" style="display:none; overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>缩略图</th>
+                        <th>ID</th>
+                        <th>用户</th>
+                        <th>模型</th>
+                        <th>提示词</th>
+                        <th>尺寸</th>
+                        <th>点赞</th>
+                        <th>时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="image-table-body">
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 分页器 -->
+        <div class="pagination" id="pagination">
+        </div>
+    </div>
+    </div><!-- /panel-images -->
+
+    <!-- ========== 用户管理面板 ========== -->
+    <div id="panel-users" style="display:none">
+    <div class="table-container">
+        <div class="table-header">
+            <span>👤 用户管理</span>
+            <div class="admin-search">
+                <input type="text" id="user-search-input" placeholder="搜索 ID / 用户名 / 昵称..." class="admin-search-input">
+                <button onclick="doUserSearch()" class="btn-preview">🔍</button>
+                <button onclick="clearUserSearch()" class="btn-cancel" style="font-size:.8rem;padding:5px 10px;">清除</button>
+            </div>
+            <span id="user-table-count">加载中...</span>
+        </div>
+        <div class="loading-overlay" id="user-loading">加载中...</div>
+        <div class="empty-state" id="user-empty" style="display:none"><p>暂无用户数据</p></div>
+        <div id="user-table-wrapper" style="display:none; overflow-x:auto;">
+            <table>
+                <thead><tr>
+                    <th>用户ID</th><th>用户名</th><th>昵称</th><th>状态</th><th>封禁原因</th><th>注册时间</th><th>操作</th>
+                </tr></thead>
+                <tbody id="user-table-body"></tbody>
+            </table>
+        </div>
+        <div class="pagination" id="user-pagination"></div>
+    </div>
+    </div><!-- /panel-users -->
+
+</div>
+
+<!-- 封禁弹窗 -->
+<div id="ban-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1001;justify-content:center;align-items:center;backdrop-filter:blur(4px)">
+    <div class="confirm-box">
+        <h3>🚫 封禁用户</h3>
+        <p style="text-align:left;font-size:13px;margin-bottom:8px;">用户: <b id="ban-username"></b></p>
+        <input type="text" id="ban-reason-input" placeholder="请输入封禁原因..." style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-soft);color:var(--text);font-size:14px;box-sizing:border-box;margin-bottom:16px;">
+        <div class="btn-row">
+            <button class="btn-cancel" onclick="closeBanModal()">取消</button>
+            <button class="btn-confirm-delete" id="ban-confirm-btn">确认封禁</button>
+        </div>
+    </div>
+</div>
+
+<!-- 解封确认弹窗 -->
+<div id="unban-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1001;justify-content:center;align-items:center;backdrop-filter:blur(4px)">
+    <div class="confirm-box">
+        <h3>✅ 解封用户</h3>
+        <p>确定要解封用户 <b id="unban-username"></b> 吗？</p>
+        <div class="btn-row">
+            <button class="btn-cancel" onclick="closeUnbanModal()">取消</button>
+            <button class="btn-unban" id="unban-confirm-btn" style="padding:8px 20px;font-size:.9rem;">确认解封</button>
+        </div>
+    </div>
+</div>
+
+<!-- 详情弹窗（图片 + 评论管理） -->
+<div id="preview-modal">
+    <button class="close-btn" onclick="closePreview()">✕</button>
+    <div class="admin-detail">
+        <div class="admin-detail-img"><img id="preview-img" src="" alt="预览"></div>
+        <div class="admin-detail-side">
+            <div class="admin-detail-meta" id="admin-detail-meta"></div>
+            <h4>💬 评论 <span id="admin-comment-count">0</span></h4>
+            <div class="admin-comment-list" id="admin-comment-list"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 删除确认弹窗 -->
+<div id="confirm-modal">
+    <div class="confirm-box">
+        <h3>⚠️ 确认删除</h3>
+        <p>确定要删除这张图片吗？此操作不可撤销。</p>
+        <div class="btn-row">
+            <button class="btn-cancel" onclick="closeConfirm()">取消</button>
+            <button class="btn-confirm-delete" id="confirm-delete-btn">确认删除</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_BASE = '';
+    let currentPage = 1;
+    let deleteTargetId = null;
+    let adminSearchQuery = '';
+    let adminItems = [];  // 当前页的图片数据
+
+    // 获取 token
+    function getToken() {
+        return localStorage.getItem('token') || '';
+    }
+
+    // 格式化时间
+    function formatTime(isoString) {
+        if (!isoString) return '-';
+        const d = new Date(isoString);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // 截断文本
+    function truncateText(text, maxLen) {
+        if (!text) return '-';
+        return text.length > maxLen ? text.substring(0, maxLen) + '…' : text;
+    }
+
+    // 验证登录（用本地 token 解析 is_admin）
+    async function verifyAdmin() {
+        const token = getToken();
+        if (!token) { showLogin(); return; }
+        try {
+            const res = await fetch('/auth/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: token })
+            });
+            const data = await res.json();
+            if (!data.success || !data.user || !data.user.is_admin) {
+                showNoAccess();
+                return;
+            }
+            showAdmin();
+            loadImages(1);
+        } catch (e) {
+            showLogin();
+        }
+    }
+
+    // 登录（管理后台独立鉴权，不走 NewAPI）
+    async function doLogin(username, password) {
+        try {
+            const res = await fetch('/auth/admin-login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await res.json();
+            if (!data.success || !data.token) {
+                throw new Error(data.message || '登录失败');
+            }
+            localStorage.setItem('token', data.token);
+            showAdmin();
+            loadImages(1);
+        } catch (e) {
+            const errEl = document.getElementById('login-error');
+            errEl.textContent = e.message;
+            errEl.style.display = 'block';
+        }
+    }
+
+    // 加载图片列表
+    async function loadImages(page) {
+        currentPage = page;
+        const token = getToken();
+        const loadingEl = document.getElementById('table-loading');
+        const wrapperEl = document.getElementById('table-wrapper');
+        const emptyEl = document.getElementById('empty-state');
+        const countEl = document.getElementById('table-count');
+
+        loadingEl.classList.add('show');
+        wrapperEl.style.display = 'none';
+        emptyEl.style.display = 'none';
+
+        try {
+            let url = '/api/gallery/admin/images?page=' + page;
+            if (adminSearchQuery) url += '&q=' + encodeURIComponent(adminSearchQuery);
+            const res = await fetch(url, {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+
+            if (!res.ok) throw new Error('加载失败');
+
+            const data = await res.json();
+            const items = data.data || [];
+            adminItems = items;
+            const total = data.total || 0;
+            const total_pages = data.total_pages || 1;
+
+            document.getElementById('stat-page').textContent = page;
+            document.getElementById('stat-count').textContent = items.length;
+            document.getElementById('stat-total').textContent = total;
+
+            countEl.textContent = '共 ' + total + ' 条记录' + (adminSearchQuery ? '（搜索: ' + adminSearchQuery + '）' : '');
+
+            loadingEl.classList.remove('show');
+
+            if (items.length === 0) {
+                emptyEl.style.display = 'block';
+                document.getElementById('pagination').innerHTML = '';
+                return;
+            }
+
+            wrapperEl.style.display = 'block';
+            renderTable(items);
+            renderPagination(page, total_pages, total);
+        } catch (e) {
+            loadingEl.classList.remove('show');
+            document.getElementById('table-count').textContent = '加载失败: ' + e.message;
+        }
+    }
+
+    // 渲染表格
+    function renderTable(items) {
+        const tbody = document.getElementById('image-table-body');
+        tbody.innerHTML = items.map((item, idx) => {
+            const thumb = item.url || '/api/gallery/file/' + item.filename;
+            const sizeKB = item.file_size ? (item.file_size / 1024).toFixed(1) + 'KB' : '-';
+            return '<tr>'
+                + '<td><img class="thumb-img" src="' + thumb + '" alt="" onclick="openDetail(' + idx + ')" onerror="this.style.display=\'none\'"></td>'
+                + '<td>' + (item.public_id || item.id) + '</td>'
+                + '<td>' + (item.username || '匿名') + '</td>'
+                + '<td>' + (item.model || '-') + '</td>'
+                + '<td class="prompt-cell" title="' + (item.prompt || '') + '">' + truncateText(item.prompt, 50) + '</td>'
+                + '<td>' + sizeKB + '</td>'
+                + '<td>' + (item.likes_count || 0) + '</td>'
+                + '<td class="time-cell">' + formatTime(item.created_at) + '</td>'
+                + '<td>'
+                + '<button class="btn-preview" onclick="openDetail(' + idx + ')">详情</button>'
+                + '<button class="btn-delete" onclick="openConfirm(' + item.id + ')">删除</button>'
+                + '</td></tr>';
+        }).join('');
+    }
+
+    // 渲染分页
+    function renderPagination(page, totalPages, total) {
+        const pagEl = document.getElementById('pagination');
+        if (totalPages <= 1) {
+            pagEl.innerHTML = `<span class="page-info">第 ${page} / ${totalPages} 页，共 ${total} 条</span>`;
+            return;
+        }
+
+        const prevDisabled = page <= 1 ? 'disabled' : '';
+        const nextDisabled = page >= totalPages ? 'disabled' : '';
+
+        let html = `<button ${prevDisabled} onclick="loadImages(${page - 1})">◀ 上一页</button>`;
+
+        // 简单页码显示
+        if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) {
+                if (i === page) {
+                    html += `<button style="background:var(--primary);color:#fff;border-color:var(--primary);">${i}</button>`;
+                } else {
+                    html += `<button onclick="loadImages(${i})">${i}</button>`;
+                }
+            }
+        } else {
+            // 省略号分页
+            if (page <= 4) {
+                for (let i = 1; i <= 5; i++) {
+                    html += i === page
+                        ? `<button style="background:var(--primary);color:#fff;border-color:var(--primary);">${i}</button>`
+                        : `<button onclick="loadImages(${i})">${i}</button>`;
+                }
+                html += `<span class="page-info">…</span>`;
+                html += `<button onclick="loadImages(${totalPages})">${totalPages}</button>`;
+            } else if (page >= totalPages - 3) {
+                html += `<button onclick="loadImages(1)">1</button>`;
+                html += `<span class="page-info">…</span>`;
+                for (let i = totalPages - 4; i <= totalPages; i++) {
+                    html += i === page
+                        ? `<button style="background:var(--primary);color:#fff;border-color:var(--primary);">${i}</button>`
+                        : `<button onclick="loadImages(${i})">${i}</button>`;
+                }
+            } else {
+                html += `<button onclick="loadImages(1)">1</button>`;
+                html += `<span class="page-info">…</span>`;
+                for (let i = page - 1; i <= page + 1; i++) {
+                    html += i === page
+                        ? `<button style="background:var(--primary);color:#fff;border-color:var(--primary);">${i}</button>`
+                        : `<button onclick="loadImages(${i})">${i}</button>`;
+                }
+                html += `<span class="page-info">…</span>`;
+                html += `<button onclick="loadImages(${totalPages})">${totalPages}</button>`;
+            }
+        }
+
+        html += `<button ${nextDisabled} onclick="loadImages(${page + 1})">下一页 ▶</button>`;
+        html += `<span class="page-info">第 ${page} / ${totalPages} 页</span>`;
+
+        pagEl.innerHTML = html;
+    }
+
+    // 删除图片
+    async function deleteImage(id) {
+        const token = getToken();
+        try {
+            const res = await fetch('/api/gallery/admin/image/' + id, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || '删除失败');
+            }
+
+            closeConfirm();
+            loadImages(currentPage);
+        } catch (e) {
+            alert('删除失败: ' + e.message);
+        }
+    }
+
+    // 弹窗控制 — 详情弹窗（图片+评论）
+    let currentDetailId = null;
+
+    function openDetail(idx) {
+        const item = adminItems[idx];
+        if (!item) return;
+        const thumb = item.url || '/api/gallery/file/' + item.filename;
+        document.getElementById('preview-img').src = thumb;
+        const meta = document.getElementById('admin-detail-meta');
+        const sizeKB = item.file_size ? (item.file_size / 1024).toFixed(1) + 'KB' : '-';
+        meta.innerHTML = '<b>#' + (item.public_id || item.id) + '</b> · @' + (item.username || '匿名') + '<br>'
+            + '模型: ' + (item.model || '-') + ' · ' + sizeKB + '<br>'
+            + '❤️ ' + (item.likes_count || 0) + ' · 💬 ' + (item.comments_count || 0) + '<br>'
+            + '提示词: ' + (item.prompt || '-');
+        currentDetailId = item.id;
+        loadAdminComments(item.id);
+        document.getElementById('preview-modal').classList.add('show');
+    }
+
+    function openPreview(url) {
+        document.getElementById('preview-img').src = url;
+        document.getElementById('admin-detail-meta').innerHTML = '';
+        document.getElementById('admin-comment-list').innerHTML = '';
+        document.getElementById('admin-comment-count').textContent = '0';
+        currentDetailId = null;
+        document.getElementById('preview-modal').classList.add('show');
+    }
+
+    function closePreview() {
+        document.getElementById('preview-modal').classList.remove('show');
+        document.getElementById('preview-img').src = '';
+        currentDetailId = null;
+    }
+
+    // 评论管理
+    async function loadAdminComments(imageId) {
+        const listEl = document.getElementById('admin-comment-list');
+        const countEl = document.getElementById('admin-comment-count');
+        listEl.innerHTML = '<div style="color:var(--text-mute);font-size:13px;padding:8px">加载中...</div>';
+        try {
+            const res = await fetch('/api/gallery/comments/' + imageId);
+            const d = await res.json();
+            countEl.textContent = d.total || 0;
+            if (d.data && d.data.length) {
+                listEl.innerHTML = d.data.map(c => {
+                    const pinCls = c.is_pinned ? ' ac-pinned' : '';
+                    const pinTag = c.is_pinned ? '<span style="color:#ff9500;font-weight:600;font-size:11px">📌置顶</span> ' : '';
+                    return '<div class="ac-item' + pinCls + '">'
+                        + '<div class="ac-body">' + pinTag
+                        + '<div class="ac-head"><span class="ac-nick">' + (c.nickname || c.username) + '</span>'
+                        + '<span class="ac-time">' + formatTime(c.created_at) + '</span></div>'
+                        + '<div class="ac-text">' + (c.content || '') + '</div>'
+                        + '<div class="ac-actions">'
+                        + '<span class="ac-btn">❤ ' + (c.likes_count || 0) + '</span>'
+                        + '<button class="ac-btn" onclick="adminPinComment(' + c.id + ',' + imageId + ')" title="' + (c.is_pinned ? '取消置顶' : '置顶') + '">📌</button>'
+                        + '<button class="ac-btn ac-del-btn" onclick="adminDelComment(' + c.id + ',' + imageId + ')" title="删除">🗑️</button>'
+                        + '</div></div></div>';
+                }).join('');
+            } else {
+                listEl.innerHTML = '<div style="color:var(--text-mute);font-size:13px;padding:12px;text-align:center">暂无评论</div>';
+            }
+        } catch (e) {
+            listEl.innerHTML = '<div style="color:#ff3b30;font-size:13px;padding:8px">加载失败</div>';
+        }
+    }
+
+    async function adminDelComment(cid, imageId) {
+        if (!confirm('确定删除这条评论？')) return;
+        try {
+            await fetch('/api/gallery/comment/delete/' + cid, { method: 'POST', headers: { Authorization: 'Bearer ' + getToken() } });
+            loadAdminComments(imageId);
+        } catch (e) { alert('删除失败'); }
+    }
+
+    async function adminPinComment(cid, imageId) {
+        try {
+            await fetch('/api/gallery/comment/pin/' + cid, { method: 'POST', headers: { Authorization: 'Bearer ' + getToken() } });
+            loadAdminComments(imageId);
+        } catch (e) { alert('操作失败'); }
+    }
+
+    // 搜索
+    function doAdminSearch() {
+        adminSearchQuery = (document.getElementById('admin-search-input').value || '').trim();
+        currentPage = 1;
+        loadImages(1);
+    }
+
+    function clearAdminSearch() {
+        document.getElementById('admin-search-input').value = '';
+        adminSearchQuery = '';
+        currentPage = 1;
+        loadImages(1);
+    }
+
+    // ========== Tab 切换 ==========
+    function switchTab(tab) {
+        document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
+        document.querySelector('.admin-tab[onclick*="' + tab + '"]').classList.add('active');
+        document.getElementById('panel-images').style.display = tab === 'images' ? '' : 'none';
+        document.getElementById('panel-users').style.display = tab === 'users' ? '' : 'none';
+        if (tab === 'users') loadUsers(1);
+    }
+
+    // ========== 用户管理 ==========
+    let userPage = 1;
+    let userSearchQuery = '';
+    let banTargetId = null;
+
+    async function loadUsers(page) {
+        userPage = page;
+        const loadingEl = document.getElementById('user-loading');
+        const wrapperEl = document.getElementById('user-table-wrapper');
+        const emptyEl = document.getElementById('user-empty');
+        const countEl = document.getElementById('user-table-count');
+        loadingEl.classList.add('show'); wrapperEl.style.display = 'none'; emptyEl.style.display = 'none';
+        try {
+            let url = '/api/gallery/admin/users?page=' + page;
+            if (userSearchQuery) url += '&q=' + encodeURIComponent(userSearchQuery);
+            const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + getToken() } });
+            if (!res.ok) throw new Error('加载失败');
+            const data = await res.json();
+            const items = data.data || [];
+            const total = data.total || 0;
+            const totalPages = data.total_pages || 1;
+            countEl.textContent = '共 ' + total + ' 位用户' + (userSearchQuery ? '（搜索: ' + userSearchQuery + '）' : '');
+            loadingEl.classList.remove('show');
+            if (items.length === 0) { emptyEl.style.display = 'block'; document.getElementById('user-pagination').innerHTML = ''; return; }
+            wrapperEl.style.display = 'block';
+            renderUserTable(items);
+            renderUserPagination(page, totalPages, total);
+        } catch (e) {
+            loadingEl.classList.remove('show');
+            countEl.textContent = '加载失败: ' + e.message;
+        }
+    }
+
+    function renderUserTable(items) {
+        document.getElementById('user-table-body').innerHTML = items.map(u => {
+            const banned = u.is_banned ? 1 : 0;
+            const statusCls = banned ? 'status-banned' : 'status-normal';
+            const statusText = banned ? '🚫 已封禁' : '✅ 正常';
+            const reason = u.ban_reason || '-';
+            const actionBtn = banned
+                ? '<button class="btn-unban" onclick="openUnbanModal(' + u.newapi_user_id + ',\'' + (u.username || '').replace(/'/g, "\\'") + '\')">解封</button>'
+                : '<button class="btn-ban" onclick="openBanModal(' + u.newapi_user_id + ',\'' + (u.username || '').replace(/'/g, "\\'") + '\')">封禁</button>';
+            return '<tr>'
+                + '<td>' + (u.newapi_user_id || '-') + '</td>'
+                + '<td>' + (u.username || '-') + '</td>'
+                + '<td>' + (u.nickname || '-') + '</td>'
+                + '<td><span class="' + statusCls + '">' + statusText + '</span></td>'
+                + '<td class="ban-reason-cell" title="' + reason + '">' + reason + '</td>'
+                + '<td class="time-cell">' + formatTime(u.created_at) + '</td>'
+                + '<td>' + actionBtn + '</td></tr>';
+        }).join('');
+    }
+
+    function renderUserPagination(page, totalPages, total) {
+        const el = document.getElementById('user-pagination');
+        if (totalPages <= 1) { el.innerHTML = '<span class="page-info">共 ' + total + ' 位用户</span>'; return; }
+        let html = '<button ' + (page <= 1 ? 'disabled' : '') + ' onclick="loadUsers(' + (page-1) + ')">◀</button>';
+        for (let i = 1; i <= totalPages && i <= 7; i++)
+            html += '<button ' + (i===page?'style="background:var(--primary);color:#fff;border-color:var(--primary)"':'') + ' onclick="loadUsers(' + i + ')">' + i + '</button>';
+        html += '<button ' + (page >= totalPages ? 'disabled' : '') + ' onclick="loadUsers(' + (page+1) + ')">▶</button>';
+        el.innerHTML = html;
+    }
+
+    function doUserSearch() { userSearchQuery = (document.getElementById('user-search-input').value || '').trim(); loadUsers(1); }
+    function clearUserSearch() { document.getElementById('user-search-input').value = ''; userSearchQuery = ''; loadUsers(1); }
+
+    // 封禁弹窗
+    function openBanModal(uid, username) {
+        banTargetId = uid;
+        document.getElementById('ban-username').textContent = username || uid;
+        document.getElementById('ban-reason-input').value = '';
+        document.getElementById('ban-modal').style.display = 'flex';
+    }
+    function closeBanModal() { document.getElementById('ban-modal').style.display = 'none'; banTargetId = null; }
+
+    document.getElementById('ban-confirm-btn').addEventListener('click', async () => {
+        if (!banTargetId && banTargetId !== 0) return;
+        const reason = (document.getElementById('ban-reason-input').value || '').trim() || '违规操作';
+        try {
+            const res = await fetch('/api/gallery/admin/ban/' + banTargetId, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+                body: JSON.stringify({ reason })
+            });
+            if (res.ok) { closeBanModal(); loadUsers(userPage); } else { alert('封禁失败'); }
+        } catch (e) { alert('操作失败'); }
+    });
+
+    // 解封弹窗
+    let unbanTargetId = null;
+    function openUnbanModal(uid, username) {
+        unbanTargetId = uid;
+        document.getElementById('unban-username').textContent = username || uid;
+        document.getElementById('unban-modal').style.display = 'flex';
+    }
+    function closeUnbanModal() { document.getElementById('unban-modal').style.display = 'none'; unbanTargetId = null; }
+
+    document.getElementById('unban-confirm-btn').addEventListener('click', async () => {
+        if (!unbanTargetId && unbanTargetId !== 0) return;
+        try {
+            const res = await fetch('/api/gallery/admin/unban/' + unbanTargetId, {
+                method: 'POST', headers: { Authorization: 'Bearer ' + getToken() }
+            });
+            if (res.ok) { closeUnbanModal(); loadUsers(userPage); } else alert('解封失败');
+        } catch (e) { alert('操作失败'); }
+    });
+
+    function openConfirm(id) {
+        deleteTargetId = id;
+        document.getElementById('confirm-modal').classList.add('show');
+    }
+
+    function closeConfirm() {
+        document.getElementById('confirm-modal').classList.remove('show');
+        deleteTargetId = null;
+    }
+
+    // 确认删除按钮
+    document.getElementById('confirm-delete-btn').addEventListener('click', () => {
+        if (deleteTargetId) {
+            deleteImage(deleteTargetId);
+        }
+    });
+
+    // ESC 关闭弹窗
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            closePreview();
+            closeConfirm();
+            closeBanModal();
+            closeUnbanModal();
+        }
+    });
+
+    // 点击背景关闭预览
+    document.getElementById('preview-modal').addEventListener('click', e => {
+        if (e.target === document.getElementById('preview-modal')) closePreview();
+    });
+    document.getElementById('ban-modal').addEventListener('click', e => {
+        if (e.target === document.getElementById('ban-modal')) closeBanModal();
+    });
+    document.getElementById('unban-modal').addEventListener('click', e => {
+        if (e.target === document.getElementById('unban-modal')) closeUnbanModal();
+    });
+
+    // 登录表单提交
+    document.getElementById('login-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        doLogin(username, password);
+    });
+
+    // 搜索框回车
+    document.getElementById('admin-search-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') doAdminSearch();
+    });
+    document.getElementById('user-search-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') doUserSearch();
+    });
+
+    // UI 显示控制
+    function showLogin() {
+        document.getElementById('login-section').style.display = 'flex';
+        document.getElementById('no-access').style.display = 'none';
+        document.getElementById('admin-content').style.display = 'none';
+    }
+
+    function showNoAccess() {
+        document.getElementById('login-section').style.display = 'none';
+        document.getElementById('no-access').style.display = 'block';
+        document.getElementById('admin-content').style.display = 'none';
+    }
+
+    function showAdmin() {
+        document.getElementById('login-section').style.display = 'none';
+        document.getElementById('no-access').style.display = 'none';
+        document.getElementById('admin-content').style.display = 'block';
+    }
+
+    // 初始化
+    verifyAdmin();
+</script>
+
+{% endblock %}

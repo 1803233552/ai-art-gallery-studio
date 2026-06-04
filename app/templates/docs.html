@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/docs.css?v={{ cache_version|default('1') }}">
+{% endblock %}
+
+{% block content %}
+<div class="docs">
+    <header class="nav">
+        <div class="nav-in">
+            <a class="logo" href="/"><span class="lo-i">{{ site_icon }}</span><span class="lo-t">{{ site_name }}</span></a>
+            <div class="nav-actions">
+                <a href="/play" class="btn">工作台</a>
+                <a href="/gallery" class="btn">作品广场</a>
+                <button class="btn-icon" onclick="toggleDark()" title="切换主题"><span class="theme-toggle-icon">🌙</span></button>
+            </div>
+        </div>
+    </header>
+
+    <main class="doc-body">
+        <h1 class="doc-title">API 与使用说明</h1>
+        <p class="doc-intro">
+            浅夜の梦支持 GPT Image 2、Gemini / Grok 图像模型、参考图编辑、作品广场上传与评论。
+            图片 API 的 <code>size</code> 必须传像素值，例如 <code>1024x1024</code>，不要把 <code>1:1</code> 这类比例直接传给 API。
+        </p>
+
+        <section class="card">
+            <h2>网站使用流程</h2>
+            <ol class="note">
+                <li>进入 <code>/play</code>，选择 API 线路，输入 API Key，点击「连接」。</li>
+                <li>连接成功后选择模型。支持参考图的模型会显示参考图上传区。</li>
+                <li>填写提示词，选择分辨率、比例、质量、输出格式等参数。</li>
+                <li>点击「生成图片」。生成结果会显示在结果画布中，并保存在本地历史；已登录用户可启用服务器历史。</li>
+                <li>结果卡片可预览、下载、查看提示词、删除；开启作品广场后可上传公开作品。</li>
+                <li>作品广场的浏览量来自真实打开行为：打开作品弹窗或详情页时才会 +1。</li>
+            </ol>
+        </section>
+
+        <section class="card">
+            <h2>API 线路</h2>
+            <p class="note">工作台下拉框会真正切换请求目标；后续模型列表、生成、任务轮询都会使用当前选中的线路。</p>
+            <table class="tb">
+                <thead><tr><th>名称</th><th>Base URL</th></tr></thead>
+                <tbody>
+                    <tr><td>主线路</td><td><code>https://api.example.com</code></td></tr>
+                    <tr><td>备用线路</td><td><code>https://api-backup.example.com</code></td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
+            <h2>认证与请求模式</h2>
+            <p class="ep">所有上游 API 请求都使用 <code>Authorization: Bearer YOUR_API_KEY</code></p>
+<pre class="code">curl https://api.example.com/v1/models \
+  -H "Authorization: Bearer YOUR_API_KEY"</pre>
+            <p class="note">
+                本站工作台支持两种内部请求模式：<code>frontend</code> 代表浏览器直连所选 API 线路；
+                <code>backend</code> 代表浏览器请求本站 <code>/api/proxy</code>，由本站服务端转发到当前线路。
+                外部开发者通常直接使用上面的 Base URL。
+            </p>
+        </section>
+
+        <section class="card">
+            <h2>当前模型</h2>
+            <table class="tb">
+                <thead><tr><th>模型 ID</th><th>请求端点</th><th>参考图</th><th>说明</th></tr></thead>
+                <tbody>
+                    <tr><td><code>gpt-image-2</code></td><td><code>/v1/images/*</code></td><td>支持</td><td>标准图片生成与编辑</td></tr>
+                    <tr><td><code>gpt-image-2-2k</code></td><td><code>/v1/images/*</code></td><td>支持</td><td>2K 规格输出</td></tr>
+                    <tr><td><code>gpt-image-2-4k</code></td><td><code>/v1/images/*</code></td><td>支持</td><td>4K 规格输出</td></tr>
+                    <tr><td><code>gemini-3.1-flash-image</code></td><td><code>/v1/chat/completions</code></td><td>支持</td><td>多模态图像模型，工作台会把比例写入提示词</td></tr>
+                    <tr><td><code>grok-imagine-image-lite</code></td><td><code>/v1/chat/completions</code></td><td>不支持</td><td>纯文本 chat content，不注入比例描述</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
+            <h2>尺寸与分辨率映射</h2>
+            <p class="note">UI 可以显示比例，但请求体中的 <code>size</code> 必须是像素字符串。当前工作台会按下表映射。</p>
+            <table class="tb">
+                <thead><tr><th>比例</th><th>1K size</th><th>2K size</th><th>4K size</th></tr></thead>
+                <tbody>
+                    <tr><td><code>1:1</code></td><td><code>1024x1024</code></td><td><code>2048x2048</code></td><td><code>2880x2880</code></td></tr>
+                    <tr><td><code>16:9</code></td><td><code>1536x864</code></td><td><code>2048x1152</code></td><td><code>3840x2160</code></td></tr>
+                    <tr><td><code>9:16</code></td><td><code>864x1536</code></td><td><code>1152x2048</code></td><td><code>2160x3840</code></td></tr>
+                    <tr><td><code>3:2</code></td><td><code>1536x1024</code></td><td><code>2048x1360</code></td><td><code>3520x2336</code></td></tr>
+                    <tr><td><code>2:3</code></td><td><code>1024x1536</code></td><td><code>1360x2048</code></td><td><code>2336x3520</code></td></tr>
+                    <tr><td><code>4:3</code></td><td><code>1024x768</code></td><td><code>2048x1536</code></td><td><code>3312x2480</code></td></tr>
+                    <tr><td><code>3:4</code></td><td><code>768x1024</code></td><td><code>1536x2048</code></td><td><code>2480x3312</code></td></tr>
+                    <tr><td><code>5:4</code></td><td><code>1280x1024</code></td><td><code>2560x2048</code></td><td><code>3216x2576</code></td></tr>
+                    <tr><td><code>4:5</code></td><td><code>1024x1280</code></td><td><code>2048x2560</code></td><td><code>2576x3216</code></td></tr>
+                    <tr><td><code>21:9</code></td><td><code>2016x864</code></td><td><code>2688x1152</code></td><td><code>3840x1648</code></td></tr>
+                </tbody>
+            </table>
+            <p class="note">完整比例还包括 <code>2:1</code>、<code>1:2</code>、<code>3:1</code>、<code>1:3</code>、<code>9:21</code>，工作台会自动发送对应像素值。</p>
+        </section>
+
+        <section class="card">
+            <h2>文生图</h2>
+            <p class="ep">POST <code>/v1/images/generations</code></p>
+<pre class="code">{
+  "model": "gpt-image-2",
+  "prompt": "A quiet anime-style girl reading beside a rainy window",
+  "n": 1,
+  "size": "1536x864",
+  "resolution": "1k",
+  "quality": "auto",
+  "background": "auto",
+  "moderation": "auto",
+  "output_format": "png"
+}</pre>
+            <p class="note">
+                <code>quality</code> 可选 <code>auto</code>、<code>low</code>、<code>medium</code>、<code>high</code>。
+                <code>output_format</code> 可选 <code>png</code>、<code>jpeg</code>、<code>webp</code>。
+                当格式是 <code>jpeg</code> 或 <code>webp</code> 时，可额外传 <code>output_compression</code>，范围 0-100。
+            </p>
+        </section>
+
+        <section class="card">
+            <h2>图生图 / 参考图编辑</h2>
+            <p class="ep">POST <code>/v1/images/edits</code> <span class="tag">multipart/form-data</span></p>
+<pre class="code">curl -X POST "https://api.example.com/v1/images/edits" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "model=gpt-image-2" \
+  -F "prompt=保持人物姿势，把画面改成黑白漫画风格" \
+  -F "image=@reference.png" \
+  -F "n=1" \
+  -F "size=1024x1024" \
+  -F "resolution=1k" \
+  -F "quality=high" \
+  -F "output_format=png"</pre>
+            <p class="note">多张参考图时重复传 <code>image</code> 字段。工作台最多保留 4 张参考图，并会在浏览器端压缩到适合上传的大小。</p>
+        </section>
+
+        <section class="card">
+            <h2>Chat 图像模型</h2>
+            <p class="ep">POST <code>/v1/chat/completions</code></p>
+<pre class="code">{
+  "model": "gemini-3.1-flash-image",
+  "stream": false,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "Make the aspect ratio 16:9, 画一座雨夜城市" }
+      ]
+    }
+  ]
+}</pre>
+            <p class="note">
+                Gemini 支持图文数组 content，可附加 <code>image_url</code> 参考图。
+                Grok 配置为纯字符串 content，且不自动注入比例描述。
+            </p>
+        </section>
+
+        <section class="card">
+            <h2>异步任务与轮询</h2>
+            <p class="note">如果上游返回 <code>task_id</code>，工作台会自动轮询 <code>/v1/tasks/{task_id}</code> 直到拿到图片或超时。</p>
+<pre class="code">GET /v1/tasks/img_xxxxxxxx
+Authorization: Bearer YOUR_API_KEY
+
+{
+  "task_id": "img_xxxxxxxx",
+  "status": "success",
+  "data": [
+    { "url": "https://..." }
+  ]
+}</pre>
+        </section>
+
+        <section class="card">
+            <h2>响应格式</h2>
+            <p class="note">工作台会兼容 base64、URL 和 task_id。推荐优先读取 <code>data</code> 数组。</p>
+<pre class="code">{
+  "created": 1770000000,
+  "data": [
+    { "b64_json": "iVBORw0KGgo..." }
+  ]
+}</pre>
+<pre class="code">{
+  "created": 1770000000,
+  "data": [
+    { "url": "https://example.com/image.png" }
+  ]
+}</pre>
+        </section>
+
+        <section class="card">
+            <h2>作品广场说明</h2>
+            <table class="tb">
+                <thead><tr><th>功能</th><th>说明</th></tr></thead>
+                <tbody>
+                    <tr><td>登录</td><td>使用 NewAPI 用户名和密码登录，登录后可上传、评论、管理自己的作品。</td></tr>
+                    <tr><td>上传</td><td>在工作台生成结果卡片中点击上传入口，填写标题后公开到作品广场。</td></tr>
+                    <tr><td>浏览量</td><td>打开作品弹窗或访问 <code>/gallery/image/{public_id}</code> 详情页时计数，不再使用占位显示。</td></tr>
+                    <tr><td>点赞</td><td>使用浏览器指纹去重，同一浏览器再次点击会取消点赞。</td></tr>
+                    <tr><td>评论</td><td>登录后可评论；作者和管理员可删除或置顶评论。</td></tr>
+                    <tr><td>我的作品</td><td>登录后可编辑标题、公开/隐藏、删除自己的图片。</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="card">
+            <h2>常见错误</h2>
+            <table class="tb">
+                <thead><tr><th>现象</th><th>处理方式</th></tr></thead>
+                <tbody>
+                    <tr><td>模型列表为空</td><td>检查 API Key、线路是否可用，以及该 Key 是否有模型权限。</td></tr>
+                    <tr><td>size 不生效</td><td>确认请求中传的是 <code>1024x1024</code> 这类像素值，不是 <code>1:1</code>。</td></tr>
+                    <tr><td>参考图失败</td><td>检查文件格式，建议 PNG / JPEG / WebP，单图不要过大。</td></tr>
+                    <tr><td>任务超时</td><td>高质量或 4K 生成耗时更长，可降低分辨率或稍后重试。</td></tr>
+                    <tr><td>作品无法上传</td><td>需要登录，并且不能重复上传相同图片。</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+</div>
+{% endblock %}

@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/play.css?v={{ cache_version|default('1') }}">
+{% endblock %}
+
+{% block content %}
+<div class="pg" data-allowed-models='{{ allowed_models_json }}' data-models-config='{{ models_config_json }}' data-request-mode="{{ request_mode }}" data-gallery-enabled="{{ 'true' if gallery_enabled else 'false' }}" data-history-server="{{ 'true' if history_server_enabled else 'false' }}" data-api-nodes='{{ api_nodes_json }}'>
+
+    <div class="studio-frame">
+        <aside class="studio-sidebar">
+            <nav class="nav-pills rail-tabs" aria-label="主导航">
+                <a class="active" href="/play"><span>工作台</span></a>
+                <a href="/gallery"><span>作品广场</span></a>
+            </nav>
+
+            <div class="sidebar-brand">
+                <div class="brand-mark">AI</div>
+                <strong>{{ site_name }}</strong>
+            </div>
+
+            <section class="side-section" id="userPnl">
+                <div class="side-section-head"><span>用户</span></div>
+                <div id="userInfo" class="user-info"></div>
+            </section>
+
+            <section class="side-section api-section">
+                <div class="side-section-head">
+                    <span>API 配置</span>
+                    <span class="conn-tag" id="connTag" hidden>已连接</span>
+                </div>
+                <div class="field">
+                    <label for="nodeSelect">线路</label>
+                    <select id="nodeSelect" class="pg-select">
+                        <option value="">选择节点</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="apiKeyInput">API Key</label>
+                    <input type="password" id="apiKeyInput" class="pg-input" placeholder="sk-..." autocomplete="off">
+                </div>
+                <button class="btn btn-primary compact" id="connectBtn" type="button">连接</button>
+            </section>
+
+            <section class="side-section balance-section">
+                <div class="side-section-head">
+                    <span>余额</span>
+                    <button class="balance-link" id="balanceBindBtn" type="button">绑定</button>
+                </div>
+                <div id="balanceInfo" class="balance-info">
+                    <div class="balance-empty">未绑定余额 token</div>
+                </div>
+                <button class="btn compact balance-refresh" id="balanceRefreshBtn" type="button">刷新余额</button>
+            </section>
+
+            <section class="side-section history-section">
+                <div class="side-section-head">
+                    <span>工作区</span>
+                    <small>GPT Image</small>
+                </div>
+                <button class="workspace-item active" type="button" aria-current="true">
+                    <span class="drag-dot" aria-hidden="true"></span>
+                    当前画布
+                </button>
+            </section>
+
+            <div class="credit-bar">
+                <span>当前状态</span>
+                <strong id="statusLabel">等待中</strong>
+            </div>
+        </aside>
+
+        <main class="studio-main">
+            <header class="workspace-header">
+                <div>
+                    <p class="eyebrow">浅夜の梦</p>
+                    <h1>AI 绘图台</h1>
+                </div>
+                <div class="workspace-actions">
+                    <button class="tool-pill" type="button" onclick="toggleDark()" title="切换主题">夜间</button>
+                    <a class="tool-pill" href="/docs">API 文档</a>
+                </div>
+            </header>
+
+            <form class="prompt-composer" id="generateForm" onsubmit="return false;">
+                <div class="composer-top">
+                    <textarea id="promptInput" class="pg-textarea" rows="6" maxlength="4000" placeholder="写下画面、角色、构图或风格，也可以附加参考图片。"></textarea>
+                    <div class="composer-counter">
+                        <button class="plain-toggle pnl-expand-btn" id="expandPromptBtn" type="button" title="放大编辑">放大编辑区</button>
+                    </div>
+                </div>
+
+                <div class="reference-row" id="refPnl">
+                    <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="添加参考图片">
+                        <input type="file" id="refFileInput" accept="image/*" multiple hidden>
+                        <div class="drop-hint" id="dropHint">
+                            <span class="drop-title">添加参考图片</span>
+                            <span>点击选择、拖拽图片或粘贴图片</span>
+                        </div>
+                        <div class="thumbs" id="refThumbs" hidden></div>
+                    </div>
+                </div>
+
+                <div class="composer-footer">
+                    <div class="count-control">
+                        <span>生成数量</span>
+                        <strong>× <span id="countVal">1</span></strong>
+                        <input type="range" id="countSlider" class="pg-slider count-slider" min="1" max="4" value="1" aria-label="生成张数">
+                    </div>
+                    <div class="composer-submit">
+                        <button class="btn btn-primary gen-btn" id="generateBtn" type="button" disabled>生成图片</button>
+                    </div>
+                </div>
+            </form>
+
+            <section class="studio-status-grid">
+                <div class="studio-card model-card">
+                    <div class="card-headline">
+                        <span>选择模型</span>
+                        <small>连接 API 后显示</small>
+                    </div>
+                    <div class="model-row" id="modelChips">
+                        <div class="hint" id="modelHint">请先连接 API</div>
+                    </div>
+                </div>
+
+                <div class="studio-card log-pnl">
+                    <div class="card-headline">
+                        <span><i class="dot idle" id="statusDot"></i> 工作日志</span>
+                    </div>
+                    <div class="progress-wrap" id="progressWrap" hidden>
+                        <div class="progress-bar" id="progressBar"></div>
+                    </div>
+                    <div class="log-box" id="logBody">
+                        <div class="log-ph">选择模型并点击生成按钮</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="result-canvas">
+                <div id="resultArea"></div>
+            </section>
+        </main>
+
+        <aside class="settings-panel" aria-label="参数设置">
+            <div class="settings-head">
+                <h2>参数设置</h2>
+            </div>
+            <div class="settings-body">
+                <div class="settings-group">
+                    <label>分辨率 <small id="resolutionLabel">1K · 1024x1024</small></label>
+                    <div class="option-grid three" id="resolutionGrid">
+                        <button class="seg-btn active" type="button" data-resolution="1k">1K</button>
+                        <button class="seg-btn" type="button" data-resolution="2k">2K</button>
+                        <button class="seg-btn" type="button" data-resolution="4k">4K</button>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <label>尺寸 / 比例 <small id="ratioLabel">1:1</small></label>
+                    <div class="option-grid three ratio-grid" id="ratioGrid">
+                        <button class="r-btn active" type="button" data-ratio="1:1">1:1</button>
+                        <button class="r-btn" type="button" data-ratio="3:2">3:2</button>
+                        <button class="r-btn" type="button" data-ratio="2:3">2:3</button>
+                        <button class="r-btn" type="button" data-ratio="16:9">16:9</button>
+                        <button class="r-btn" type="button" data-ratio="9:16">9:16</button>
+                        <button class="r-btn" type="button" data-ratio="4:3">4:3</button>
+                        <button class="r-btn" type="button" data-ratio="3:4">3:4</button>
+                        <button class="r-btn" type="button" data-ratio="5:4">5:4</button>
+                        <button class="r-btn" type="button" data-ratio="4:5">4:5</button>
+                        <button class="r-btn" type="button" data-ratio="2:1">2:1</button>
+                        <button class="r-btn" type="button" data-ratio="1:2">1:2</button>
+                        <button class="r-btn" type="button" data-ratio="3:1">3:1</button>
+                        <button class="r-btn" type="button" data-ratio="1:3">1:3</button>
+                        <button class="r-btn" type="button" data-ratio="21:9">21:9</button>
+                        <button class="r-btn" type="button" data-ratio="9:21">9:21</button>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <label>质量</label>
+                    <select id="qualitySelect" class="pg-select">
+                        <option value="auto">auto</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                    </select>
+                </div>
+
+                <div class="settings-group">
+                    <label>输出格式</label>
+                    <select id="formatSelect" class="pg-select">
+                        <option value="png">png</option>
+                        <option value="jpeg">jpeg</option>
+                        <option value="webp">webp</option>
+                    </select>
+                </div>
+
+                <div class="settings-group compact-fields">
+                    <label>
+                        <span>背景</span>
+                        <select id="backgroundSelect" class="pg-select">
+                            <option value="auto">auto</option>
+                            <option value="opaque">opaque</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>审核</span>
+                        <select id="moderationSelect" class="pg-select">
+                            <option value="auto">auto</option>
+                            <option value="low">low</option>
+                        </select>
+                    </label>
+                </div>
+
+                <label class="settings-group" id="compressionField" hidden>
+                    <span>压缩 <b id="compressionVal">90</b></span>
+                    <input type="range" id="compressionSlider" class="pg-slider" min="0" max="100" value="90">
+                </label>
+            </div>
+        </aside>
+    </div>
+</div>
+
+<!-- Preview Dialog -->
+<div class="preview-overlay" id="previewOverlay" hidden>
+    <button class="preview-close" id="previewClose">✕</button>
+    <img class="preview-img" id="previewImg" src="" alt="preview">
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/play.js?v={{ cache_version|default('1') }}"></script>
+{% endblock %}

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/home.css">
+{% endblock %}
+
+{% block content %}
+<div class="home">
+    <!-- Navigation -->
+    <header class="nav">
+        <div class="nav-in">
+            <a class="logo" href="/"><span class="lo-i">{{ site_icon }}</span><span class="lo-t">{{ site_name }}</span></a>
+            <div class="nav-actions">
+                <button class="btn-icon" onclick="toggleDark()"><span class="theme-toggle-icon">🌙</span></button>
+                {% if gallery_enabled %}
+                <a href="/gallery" class="btn">图片广场 🎨</a>
+                {% endif %}
+                <a href="/docs" class="btn">开发文档 📄</a>
+                <a href="/play" class="btn btn-primary">开始创作 →</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-in">
+            <p class="eyebrow">GPT Image 2 · 文生图 · 图生图 · 2K/4K 放大</p>
+            <h1 class="title"><span class="gradient-text">AI 图片生成</span><br>高清创作，一键完成</h1>
+            <p class="sub">
+                专业级 AI 图片生成平台，支持文生图、图生图、多比例、2K/4K 高清放大<br>
+                OpenAI 兼容 API · 即开即用
+            </p>
+            <div class="hero-btns">
+                <a href="/play" class="btn btn-primary hero-btn">▶ 立即体验</a>
+                {% if gallery_enabled %}
+                <a href="/gallery" class="btn hero-btn-sec">🎨 图片广场</a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="sec">
+        <h2 class="sec-h">核心能力</h2>
+        <div class="feat-grid">
+            <div class="feat-card">
+                <div class="feat-icon">🪄</div>
+                <div class="feat-title">AI 文生图</div>
+                <div class="feat-desc">输入文字描述，AI 为你生成高清图片。支持多种模型和风格。</div>
+            </div>
+            <div class="feat-card">
+                <div class="feat-icon">🖼</div>
+                <div class="feat-title">图生图编辑</div>
+                <div class="feat-desc">上传参考图片，AI 理解内容并生成全新创作，支持多图参考。</div>
+            </div>
+            <div class="feat-card">
+                <div class="feat-icon">📐</div>
+                <div class="feat-title">2K / 4K 放大</div>
+                <div class="feat-desc">一键输出 2K 或 4K 高清大图，满足印刷、海报等高分辨率需求。</div>
+            </div>
+            <div class="feat-card">
+                <div class="feat-icon">📊</div>
+                <div class="feat-title">多比例 · 多张数</div>
+                <div class="feat-desc">1:1、16:9、9:16 等多种画面比例，单次最多 4 张并发生成。</div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

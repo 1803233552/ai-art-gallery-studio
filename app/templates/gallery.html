@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block extra_css %}<link rel="stylesheet" href="/static/css/gallery.css?v={{ cache_version|default('1') }}">{% endblock %}
+{% block content %}
+<header class="nav"><div class="nav-in">
+    <a class="logo" href="/"><span class="lo-i">{{ site_icon }}</span><span class="lo-t">{{ site_name }}</span></a>
+    <div class="nav-actions">
+        <a href="/play" class="btn">工作台</a>
+        <a href="/gallery" class="btn btn-primary">作品广场</a>
+        <button class="btn-icon" onclick="toggleDark()" title="切换主题"><span class="theme-toggle-icon">🌙</span></button>
+    </div>
+</div></header>
+<div class="gal" data-detail-id="{{ detail_id|default(0) }}" data-user-page="{{ user_page|default('') }}">
+    <header class="gal-header">
+        <div class="gal-hero">
+            <div class="gal-hero-copy">
+                <div class="gal-kicker">IMAGIO COMMUNITY</div>
+                <h1 class="gal-title">探索、分享图片和提示词</h1>
+                <p class="gal-subtitle">浏览创作者公开作品，收藏灵感，打开提示词，继续生成属于你的下一张图。</p>
+                <div class="gal-hero-actions">
+                    <a href="/play" class="btn btn-primary">去生成图片 →</a>
+                    <a href="/docs" class="btn">查看 API</a>
+                </div>
+            </div>
+            <aside class="gal-submit-card">
+                <div class="gal-submit-tag">如何投稿</div>
+                <p>在工作台生成图片后，可一键上传到作品广场；也可以在「我的作品」中管理公开状态、标题和资料。</p>
+                <div class="gal-submit-actions">
+                    <a href="/play" class="btn btn-primary">开始创作</a>
+                    <a href="/gallery" class="btn">浏览作品</a>
+                </div>
+            </aside>
+        </div>
+        <div class="gal-top"><div class="user-area" id="userArea"></div></div>
+        <div class="gal-toolbar">
+            <div class="sort-tabs"><button class="sort-btn active" data-sort="likes">推荐</button><button class="sort-btn" data-sort="newest">最新</button></div>
+            <div class="search-bar">
+                <select class="search-scope" id="searchScope"><option value="all">全部</option><option value="title">标题</option><option value="prompt">提示词</option></select>
+                <input type="text" class="search-input" id="searchInput" placeholder="搜索图片...">
+                <button class="btn search-go" id="searchGo">搜索</button>
+            </div>
+            <div class="view-tabs"><button class="view-btn active" data-view="grid">⊞</button><button class="view-btn" data-view="list">☰</button></div>
+        </div>
+    </header>
+    <section class="pnl user-center" id="userCenter" hidden>
+        <div class="uc-header">
+            <div class="uc-avatar-wrap"><img class="uc-avatar" id="ucAvatar" src="" alt=""><button class="uc-avatar-edit" id="ucAvatarEdit" hidden>✏️</button></div>
+            <div class="uc-info"><div class="uc-nickname" id="ucNickname"></div><div class="uc-uid" id="ucUid"></div>
+                <div class="uc-stats"><span>🖼 <b id="ucImgCount">0</b> 作品</span><span>❤️ <b id="ucLikeCount">0</b> 获赞</span></div></div>
+            <div class="uc-actions"><button class="btn" id="ucEditBtn" hidden>编辑资料</button><button class="btn" id="ucBackBtn">← 返回广场</button></div>
+        </div>
+        <div class="uc-bio" id="ucBio"></div>
+        <div class="uc-home-link" id="ucHomeLink"></div>
+        <div class="uc-edit" id="ucEdit" hidden>
+            <div class="field"><label>昵称</label><input class="pg-input" id="ucNickInput" maxlength="50"></div>
+            <div class="field"><label>个人签名</label><input class="pg-input" id="ucBioInput" maxlength="200" placeholder="介绍一下自己..."></div>
+            <div class="field"><label>头像URL</label><input class="pg-input" id="ucAvatarInput" placeholder="https://..."></div>
+            <button class="btn btn-primary" id="ucSaveBtn" style="margin-top:8px">保存</button>
+        </div>
+        <h3 style="margin:20px 0 12px;font-size:16px">我的作品</h3>
+        <div class="gal-grid" id="myImagesGrid"></div>
+    </section>
+    <div class="gal-grid" id="galleryGrid"></div>
+    <div class="empty-state" id="emptyState" hidden><span class="empty-icon">🖼️</span><p>暂无图片</p></div>
+    <div class="pagination" id="pagination"></div>
+    <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div><span>加载中...</span></div>
+</div>
+<div class="modal" id="previewModal"><div class="modal-backdrop"></div><div class="modal-body preview-body">
+    <button class="modal-close" id="previewClose">✕</button>
+    <div class="preview-img-wrap"><img id="previewImage" src="" alt=""></div>
+    <div class="preview-info">
+        <div class="pv-author"><img class="pv-avatar" id="pvAvatar" src="" alt=""><div><div class="pv-nickname" id="pvNickname"></div><div class="pv-uid" id="pvUid"></div></div></div>
+        <div class="preview-pid" id="previewPid"></div>
+        <div class="preview-meta"><span class="preview-model" id="previewModel"></span><span class="preview-date" id="previewDate"></span></div>
+        <p class="preview-prompt" id="previewPrompt"></p>
+        <div class="preview-actions">
+            <button class="like-btn" id="previewLikeBtn"><span class="like-icon">🤍</span><span class="like-count" id="previewLikeCount">0</span></button>
+            <a class="btn btn-primary" id="previewDownload" href="#" download>⬇️ 下载</a>
+        </div>
+        <div class="pv-comments"><h4>💬 评论 <span class="comment-count" id="commentCount">0</span></h4>
+            <div class="comment-list" id="commentList"></div>
+            <div class="comment-input" id="commentInput" hidden><textarea class="pg-input" id="commentText" rows="2" placeholder="写下你的评论..." maxlength="500"></textarea><button class="btn btn-primary" id="commentSubmit">发表</button></div>
+            <div class="comment-login-hint" id="commentLoginHint">登录后即可评论</div>
+        </div>
+    </div>
+</div></div>
+<div class="modal" id="loginModal"><div class="modal-backdrop"></div><div class="modal-body login-body">
+    <button class="modal-close" id="loginClose">✕</button><h2>🔐 登录</h2>
+    <form id="loginForm"><div class="field"><label>用户名</label><input type="text" id="username" required placeholder="NewAPI 用户名" class="pg-input"></div>
+        <div class="field"><label>密码</label><input type="password" id="password" required placeholder="密码" class="pg-input"></div>
+        <button type="submit" class="btn btn-primary" style="width:100%;height:44px;border-radius:12px">登录</button></form>
+    <p class="login-error" id="loginError" hidden></p>
+</div></div>
+{% endblock %}
+{% block extra_js %}<script src="/static/js/gallery.js?v={{ cache_version|default('1') }}"></script>{% endblock %}

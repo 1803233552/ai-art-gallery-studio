@@ -1,0 +1,147 @@
+/* ============================================================
+   Docs – Apple Design Language (对齐原站 md.jispul.com)
+   ============================================================ */
+.docs { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+
+.doc-body {
+    max-width: 900px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 48px 32px 80px;
+}
+.doc-title {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    margin-bottom: 12px;
+}
+.doc-intro {
+    font-size: 16px;
+    color: var(--text-soft);
+    line-height: 1.7;
+    margin-bottom: 40px;
+}
+.doc-intro code {
+    background: var(--bg-soft);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+}
+
+/* Card sections */
+.card {
+    background: var(--bg-card-solid);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    margin-bottom: 24px;
+}
+.card h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0 0 16px;
+    letter-spacing: -.3px;
+}
+.card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 20px 0 8px;
+    color: var(--text-soft);
+}
+
+/* Endpoint */
+.ep {
+    font-size: 14px;
+    margin-bottom: 12px;
+    color: var(--text-soft);
+}
+.ep code {
+    background: var(--bg-soft);
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--primary);
+    border: 1px solid var(--border);
+    font-weight: 600;
+}
+.tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-weight: 600;
+    vertical-align: middle;
+}
+
+/* Code block */
+.code {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: var(--text-soft);
+    font-family: SF Mono, ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre;
+    margin: 8px 0;
+}
+
+/* Note */
+.note {
+    font-size: 14px;
+    color: var(--text-mute);
+    margin: 8px 0 0;
+    line-height: 1.6;
+}
+.note code {
+    background: var(--bg-soft);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+    border: 1px solid var(--border);
+}
+.note li {
+    margin: 6px 0;
+}
+ol.note {
+    padding-left: 22px;
+}
+
+/* Table */
+.tb {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+.tb th, .tb td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+.tb th {
+    font-weight: 600;
+    color: var(--text);
+    background: var(--bg-soft);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+.tb td code {
+    background: var(--bg-soft);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--primary);
+    border: 1px solid var(--border);
+}
+.tb tr:last-child td { border-bottom: none; }
+
+/* Responsive */
+@media (max-width: 600px) {
+    .doc-body { padding: 24px 16px 60px; }
+}
