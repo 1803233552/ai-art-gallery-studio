@@ -1,6 +1,4 @@
 """绘图历史 API — 已登录用户的绘图记录临时存储到服务器"""
-import os
-import uuid
 import base64
 import asyncio
 import logging
@@ -244,11 +242,21 @@ async def fetch_image_as_base64(request: Request):
 
     # 先不带鉴权尝试，若返回 401/403 则重试带鉴权
     async def _do_download(headers: dict):
+        last_error = None
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                return resp.status, resp.content_type or "image/png", await resp.read()
+            for attempt in range(1, 4):
+                try:
+                    async with session.get(
+                        url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)
+                    ) as resp:
+                        return resp.status, resp.content_type or "image/png", await resp.read()
+                except aiohttp.ClientError as e:
+                    last_error = e
+                    if attempt < 3:
+                        await asyncio.sleep(1.5 * attempt)
+                        continue
+                    raise
+        raise last_error or RuntimeError("下载失败")
 
     try:
         status, ct, data = await _do_download({})

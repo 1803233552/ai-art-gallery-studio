@@ -35,6 +35,10 @@
                         <option value="">选择节点</option>
                     </select>
                 </div>
+                <div class="field" id="customBaseField" hidden>
+                    <label for="customBaseInput">自定义 Base URL</label>
+                    <input type="url" id="customBaseInput" class="pg-input" placeholder="https://api.example.com 或 127.0.0.1:3000" autocomplete="off">
+                </div>
                 <div class="field">
                     <label for="apiKeyInput">API Key</label>
                     <input type="password" id="apiKeyInput" class="pg-input" placeholder="sk-..." autocomplete="off">
@@ -179,7 +183,7 @@
 
                 <div class="settings-group">
                     <label>质量</label>
-                    <select id="qualitySelect" class="pg-select">
+                    <select id="qualitySelect" class="pg-select" aria-label="质量">
                         <option value="auto">auto</option>
                         <option value="low">low</option>
                         <option value="medium">medium</option>
@@ -189,7 +193,7 @@
 
                 <div class="settings-group">
                     <label>输出格式</label>
-                    <select id="formatSelect" class="pg-select">
+                    <select id="formatSelect" class="pg-select" aria-label="输出格式">
                         <option value="png">png</option>
                         <option value="jpeg">jpeg</option>
                         <option value="webp">webp</option>

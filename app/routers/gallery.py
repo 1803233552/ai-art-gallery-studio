@@ -16,6 +16,10 @@ from app.routers.auth import verify_newapi_token, is_admin
 
 router = APIRouter(prefix="/api/gallery", tags=["gallery"])
 
+AVATAR_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+BUILTIN_AVATAR_DIR = Path(__file__).resolve().parents[1] / "static" / "img" / "avatars"
+LEGACY_AVATAR_DIR = Path("data/touxiang")
+
 def get_storage_path() -> Path:
     p = Path(get("gallery.storage_path", "./gallery_images"))
     p.mkdir(parents=True, exist_ok=True)
@@ -31,10 +35,16 @@ async def _next_public_id(db) -> int:
     return current + 1
 
 def _random_avatar(username: str = "") -> str:
-    """基于用户名哈希从 data/touxiang 确定性选取头像，保证同一用户始终分配同一头像"""
-    avatar_dir = Path("data/touxiang")
-    avatar_dir.mkdir(parents=True, exist_ok=True)
-    files = sorted(f.name for f in avatar_dir.iterdir() if f.suffix.lower() in ('.png','.jpg','.jpeg','.gif','.webp'))
+    """基于用户名哈希从内置头像池确定性选取头像，保证同一用户始终分配同一头像"""
+    files = []
+    seen = set()
+    for avatar_dir in (BUILTIN_AVATAR_DIR, LEGACY_AVATAR_DIR):
+        if not avatar_dir.exists():
+            continue
+        for f in sorted(avatar_dir.iterdir(), key=lambda p: p.name):
+            if f.is_file() and f.suffix.lower() in AVATAR_EXTENSIONS and f.name not in seen:
+                files.append(f.name)
+                seen.add(f.name)
     if files:
         idx = sum(ord(c) for c in (username or 'u')) % len(files)
         return f"/api/gallery/avatar/{files[idx]}"
@@ -65,9 +75,14 @@ async def gen_avatar(name: str):
 
 @router.get("/avatar/{filename}")
 async def get_avatar_file(filename: str):
-    """获取 data/touxiang 中的头像文件"""
-    filepath = Path("data/touxiang") / filename
-    if not filepath.exists():
+    """获取内置默认头像文件（兼容旧 data/touxiang 目录）"""
+    filepath = None
+    for avatar_dir in (BUILTIN_AVATAR_DIR, LEGACY_AVATAR_DIR):
+        candidate = avatar_dir / filename
+        if candidate.exists() and candidate.is_file():
+            filepath = candidate
+            break
+    if not filepath:
         raise HTTPException(404, "头像不存在")
     return FileResponse(filepath)
 

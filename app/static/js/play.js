@@ -81,7 +81,7 @@ const state = {
     moderation: 'auto',
     count: 1,
     refImages: [],          // base64 dataURLs
-    history: [],            // [{id, model, time, images:[], text:''}]
+    history: [],            // [{id, model, time, images:[], text:'', params:{...}}]
     isGenerating: false,
     isConnected: false,
     logs: [],
@@ -97,6 +97,8 @@ const $$ = (s) => document.querySelectorAll(s);
 const els = {
     playground:       $('.pg'),
     nodeSelect:        $('#nodeSelect'),
+    customBaseField:   $('#customBaseField'),
+    customBaseInput:   $('#customBaseInput'),
     apiKeyInput:       $('#apiKeyInput'),
     connectBtn:        $('#connectBtn'),
     connTag:           $('#connTag'),
@@ -214,6 +216,7 @@ const SIZE_MAP = {
 };
 
 const REQUIRED_API_NODES = {};
+const CUSTOM_NODE_VALUE = '__custom_base_url__';
 
 // ============================================================
 // 工具函数
@@ -237,9 +240,39 @@ function getRequestMode() {
     return els.playground.dataset.requestMode || 'frontend';
 }
 
+function normalizeBaseUrl(url) {
+    const value = String(url || '').trim().replace(/\/+$/, '');
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    return `http://${value}`;
+}
+
 function getActiveBaseUrl() {
     const selected = els.nodeSelect?.value?.trim() || '';
-    return (selected || state.baseUrl || '').replace(/\/$/, '');
+    if (selected === CUSTOM_NODE_VALUE) {
+        return normalizeBaseUrl(els.customBaseInput?.value || localStorage.getItem('ai_custom_base') || state.baseUrl || '');
+    }
+    return normalizeBaseUrl(selected || state.baseUrl || '');
+}
+
+function isCustomNodeSelected() {
+    return els.nodeSelect?.value === CUSTOM_NODE_VALUE;
+}
+
+function updateCustomBaseVisibility() {
+    if (!els.customBaseField) return;
+    els.customBaseField.hidden = !isCustomNodeSelected();
+}
+
+function saveActiveNode(baseUrl) {
+    const normalized = normalizeBaseUrl(baseUrl);
+    if (isCustomNodeSelected()) {
+        localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
+        localStorage.setItem('ai_custom_base', normalized);
+    } else {
+        localStorage.setItem('ai_node', normalized);
+    }
+    localStorage.setItem('ai_balance_base', normalized);
 }
 
 function isGalleryEnabled() {
@@ -258,6 +291,9 @@ function getImageOptions() {
         quality: state.quality || 'auto',
         background: state.background || 'auto',
         moderation: state.moderation || 'auto',
+        // 优先让上游返回图片 URL，避免几 MB 的 base64 JSON 走长连接返回时更容易触发 TLS 断链。
+        // 前端已有 URL 图片下载/缓存逻辑；若上游不支持该字段，通常会忽略。
+        response_format: 'url',
         output_format: outputFormat,
     };
     if ((outputFormat === 'jpeg' || outputFormat === 'webp') && Number.isFinite(state.outputCompression)) {
@@ -365,6 +401,41 @@ function parseError(data) {
     if (msg && code) return `${ERROR_MAP.unknown}（${code}: ${msg}）`;
     if (msg) return msg;
     return ERROR_MAP.unknown;
+}
+
+function isUnsupportedResponseFormatError(err) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    return msg.includes('response_format')
+        || msg.includes('response format')
+        || msg.includes('unknown parameter')
+        || msg.includes('invalid parameter')
+        || msg.includes('unsupported parameter')
+        || msg.includes('unexpected field')
+        || msg.includes('unrecognized request argument');
+}
+
+async function requestJsonWithUrlFallback(endpoint, fetchOptions, bodyOrForm, isMultipart = false) {
+    const resp = await fetch(endpoint, fetchOptions);
+    try {
+        return await safeJson(resp);
+    } catch (err) {
+        if (!isUnsupportedResponseFormatError(err)) throw err;
+        addLog('当前节点不支持 response_format=url，已自动降级为默认返回格式重试', 'warn');
+    }
+
+    if (isMultipart) {
+        bodyOrForm.delete('response_format');
+        const retryResp = await fetch(endpoint, { ...fetchOptions, body: bodyOrForm });
+        return safeJson(retryResp);
+    }
+
+    const retryBody = { ...bodyOrForm };
+    delete retryBody.response_format;
+    const retryResp = await fetch(endpoint, {
+        ...fetchOptions,
+        body: JSON.stringify(retryBody),
+    });
+    return safeJson(retryResp);
 }
 
 // ============================================================
@@ -659,8 +730,7 @@ async function connectApi() {
         addLog(`连接成功，共 ${state.models.length} 个可用模型`, 'success');
 
         localStorage.setItem('ai_key', apiKey);
-        localStorage.setItem('ai_node', baseUrl);
-        localStorage.setItem('ai_balance_base', baseUrl);
+        saveActiveNode(baseUrl);
         if (getBalanceToken()) refreshBalance();
 
         renderModelChips();
@@ -747,12 +817,108 @@ function selectResolution(resolution) {
     updateResolutionLabel();
 }
 
+function captureGenerationParams(prompt = state.prompt) {
+    return {
+        model: state.selectedModel,
+        prompt,
+        ratio: state.ratio,
+        resolution: state.resolution,
+        quality: state.quality,
+        outputFormat: state.outputFormat,
+        outputCompression: state.outputCompression,
+        background: state.background,
+        moderation: state.moderation,
+        count: state.count,
+        baseUrl: getActiveBaseUrl(),
+        refImageCount: state.refImages.length,
+    };
+}
+
+function applyGenerationParams(batch) {
+    const params = batch?.params || {};
+    const model = params.model || batch?.model || '';
+    const prompt = params.prompt ?? batch?.text ?? '';
+
+    if (prompt !== '') {
+        els.promptInput.value = prompt;
+        state.prompt = prompt;
+    }
+
+    if (model) {
+        if (!state.models.includes(model)) {
+            state.models.unshift(model);
+            renderModelChips();
+        }
+        selectModel(model);
+    }
+
+    selectRatio(params.ratio || state.ratio || '1:1');
+    selectResolution(params.resolution || state.resolution || '1k');
+
+    state.quality = params.quality || state.quality || 'auto';
+    if (els.qualitySelect) els.qualitySelect.value = state.quality;
+
+    state.outputFormat = params.outputFormat || state.outputFormat || 'png';
+    if (els.formatSelect) els.formatSelect.value = state.outputFormat;
+    if (els.compressionField) els.compressionField.hidden = !(state.outputFormat === 'jpeg' || state.outputFormat === 'webp');
+
+    if (Number.isFinite(Number(params.outputCompression))) {
+        state.outputCompression = Number(params.outputCompression);
+        if (els.compressionSlider) els.compressionSlider.value = state.outputCompression;
+        if (els.compressionVal) els.compressionVal.textContent = state.outputCompression;
+    }
+
+    state.background = params.background || state.background || 'auto';
+    if (els.backgroundSelect) els.backgroundSelect.value = state.background;
+
+    state.moderation = params.moderation || state.moderation || 'auto';
+    if (els.moderationSelect) els.moderationSelect.value = state.moderation;
+
+    if (Number.isFinite(Number(params.count))) {
+        state.count = Number(params.count);
+        if (els.countSlider) els.countSlider.value = state.count;
+        if (els.countVal) els.countVal.textContent = state.count;
+    }
+
+    if (params.baseUrl && els.nodeSelect) {
+        const normalized = normalizeBaseUrl(params.baseUrl);
+        const matched = Array.from(els.nodeSelect.options).find(opt => normalizeBaseUrl(opt.value) === normalized);
+        if (matched) {
+            els.nodeSelect.value = matched.value;
+        } else if (els.customBaseInput) {
+            els.nodeSelect.value = CUSTOM_NODE_VALUE;
+            els.customBaseInput.value = normalized;
+        }
+        updateCustomBaseVisibility();
+        state.baseUrl = normalized;
+        saveActiveNode(normalized);
+    }
+
+    const canUseRefImages = !model || getModelCfg(model).ref_image !== false;
+    const hasRefMeta = Array.isArray(batch?.refImages) || Number.isFinite(Number(params.refImageCount));
+    if (hasRefMeta) {
+        const refs = canUseRefImages
+            ? (Array.isArray(batch?.refImages) ? batch.refImages.filter(Boolean).slice(0, 4) : [])
+            : [];
+        state.refImages = refs;
+        renderRefThumbs();
+        if (Number(params.refImageCount || 0) > 0 && refs.length === 0) {
+            addLog('这条历史记录没有可恢复的参考图数据，可能是旧版本生成或本地缓存已被清理', 'warn');
+        }
+    }
+
+    addLog(`已加载历史参数：${model || '未知模型'}`, 'success');
+    showToast(state.refImages.length ? `已加载生成参数和 ${state.refImages.length} 张参考图` : '已加载生成参数', 'success');
+    els.promptInput?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 // ============================================================
 // 参考图片
 // ============================================================
 /** 压缩图片：最大边不超过 MAX_REF_PX，JPEG quality 0.85，每张 ≤ ~1-2MB */
 const MAX_REF_PX = 2048;
 const REF_QUALITY = 0.85;
+const HISTORY_MAX_BATCHES = 50;
 
 function _compressImage(file) {
     return new Promise((resolve, reject) => {
@@ -881,15 +1047,19 @@ async function generateImages() {
 
         // 保存到历史
         const batchId = uid();
+        const refImages = hasRef ? state.refImages.slice(0, 4) : [];
         const batch = {
             id: batchId,
             model: state.selectedModel,
             time: new Date().toLocaleString('zh-CN'),
             images,
             text: prompt,
+            params: captureGenerationParams(prompt),
+            refImages,
         };
         state.history.unshift(batch);
-        if (state.history.length > 50) state.history.pop();
+        const removedBatches = state.history.splice(HISTORY_MAX_BATCHES);
+        if (removedBatches.length) await deleteHistoryBatchLocalData(removedBatches);
         await saveHistory();
 
         renderResultBatch(batch);
@@ -922,17 +1092,30 @@ async function genStandard(prompt, count, mode) {
         ...imageOptions,
     };
     addLog(`请求生成 ${count} 张图片，size=${imageOptions.size}，resolution=${imageOptions.resolution}`);
-    const resp = await fetch(endpoint, {
+    const data = await requestJsonWithUrlFallback(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-    });
-    const data = await safeJson(resp);
+    }, body);
     if (data.error) throw new Error(parseError(data));
     return resolveImageResponse(data, count, mode);
 }
 
 async function genWithRefImages(prompt, count, mode) {
+    const images = await genWithRefImagesOnce(prompt, count, mode);
+    if (images.length >= count || count <= 1) return images.slice(0, count);
+
+    addLog(`当前节点图生图只返回 ${images.length}/${count} 张，自动补齐剩余 ${count - images.length} 张`, 'warn');
+    while (images.length < count) {
+        const nextIndex = images.length + 1;
+        const more = await genWithRefImagesOnce(prompt, 1, mode, `补齐 ${nextIndex}/${count}`);
+        if (!more.length) break;
+        images.push(...more);
+    }
+    return images.slice(0, count);
+}
+
+async function genWithRefImagesOnce(prompt, count, mode, label = '') {
     const endpoint = mode === 'backend' ? '/api/proxy/v1/images/edits' : `${getActiveBaseUrl()}/v1/images/edits`;
     const headers = buildHeadersMultipart();
     const imageOptions = getImageOptions();
@@ -947,9 +1130,8 @@ async function genWithRefImages(prompt, count, mode) {
         const blob = dataURLtoBlob(b64);
         form.append('image', blob, `ref_${i}.png`);
     });
-    addLog(`请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${imageOptions.size}`);
-    const resp = await fetch(endpoint, { method: 'POST', headers, body: form });
-    const data = await safeJson(resp);
+    addLog(`${label ? label + '：' : ''}请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${imageOptions.size}`);
+    const data = await requestJsonWithUrlFallback(endpoint, { method: 'POST', headers, body: form }, form, true);
     if (data.error) throw new Error(parseError(data));
     return resolveImageResponse(data, count, mode);
 }
@@ -965,7 +1147,7 @@ async function resolveImageResponse(data, count, mode) {
         addLog(`任务已提交，开始轮询 ${taskIds.length} 个 task_id`);
         const results = [];
         for (const taskId of taskIds) {
-            const taskImages = await pollImageTask(taskId, mode);
+            const taskImages = await pollImageTask(taskId, mode, count - results.length);
             results.push(...taskImages);
             if (results.length >= count) break;
         }
@@ -1059,7 +1241,7 @@ function normalizeImageString(value) {
     return null;
 }
 
-async function pollImageTask(taskId, mode) {
+async function pollImageTask(taskId, mode, expectedCount = 1) {
     const endpoint = mode === 'backend'
         ? `/api/proxy/v1/tasks/${encodeURIComponent(taskId)}`
         : `${getActiveBaseUrl()}/v1/tasks/${encodeURIComponent(taskId)}`;
@@ -1075,6 +1257,8 @@ async function pollImageTask(taskId, mode) {
 
         const payload = data.data || data;
         const status = String(payload.status || data.status || '').toLowerCase();
+        const isFailed = /failed|error|cancel/.test(status);
+        const isDone = /complete|completed|succeeded|success|finished|done/.test(status);
         const progress = Number(payload.progress ?? data.progress ?? -1);
         if (Number.isFinite(progress) && progress >= 0 && progress !== lastProgress && progress % 25 === 0) {
             lastProgress = progress;
@@ -1082,12 +1266,17 @@ async function pollImageTask(taskId, mode) {
         }
 
         const images = extractImageResults(data);
-        if (images.length > 0 && !/failed|error|cancel/.test(status)) {
+        if (images.length >= expectedCount && !isFailed) {
             addLog(`任务 ${taskId.slice(0, 10)}… 已完成`);
             return images;
         }
 
-        if (/failed|error|cancel/.test(status)) {
+        if (images.length > 0 && (isDone || !status) && !isFailed) {
+            addLog(`任务 ${taskId.slice(0, 10)}… 已完成，返回 ${images.length}/${expectedCount} 张`, images.length < expectedCount ? 'warn' : '');
+            return images;
+        }
+
+        if (isFailed) {
             const msg = payload.error?.message || payload.message || payload.error || '任务生成失败';
             throw new Error(String(msg));
         }
@@ -1539,6 +1728,7 @@ function renderAllResults() {
                     actions.innerHTML = `
                         <button class="preview-btn" title="预览">🔍</button>
                         <button class="download-btn" title="下载">⬇️</button>
+                        <button class="reuse-btn" title="加载生成参数到工作台">♻️</button>
                         ${isGalleryEnabled() ? '<button class="upload-btn" title="上传广场">🎨</button>' : ''}`;
 
                     item.appendChild(imgEl);
@@ -1549,6 +1739,7 @@ function renderAllResults() {
                     imgEl.addEventListener('click', () => openPreview(displaySrc));
                     actions.querySelector('.preview-btn').addEventListener('click', () => openPreview(displaySrc));
                     actions.querySelector('.download-btn').addEventListener('click', () => downloadImage(displaySrc, `${batch.id}_${i}`));
+                    actions.querySelector('.reuse-btn').addEventListener('click', () => applyGenerationParams(batch));
                     if (isGalleryEnabled()) {
                         item.querySelector('.upload-btn').addEventListener('click', () => uploadToGallery(img, batch));
                     }
@@ -1994,7 +2185,6 @@ async function uploadToGallery(img, batch) {
 const IDB_NAME = 'ai_studio_history';
 const IDB_VER = 2;
 const IDB_STORE = 'images'; // key = batchId_imgIndex, value = base64
-const IDB_MAX = 200;        // 最多存储图片数
 
 /** 返回当前用户 ID（用于本地存储隔离），未登录返回 'guest' */
 function _currentUid() {
@@ -2054,6 +2244,45 @@ async function _idbDeleteKeys(keys) {
 }
 
 function _imgKey(batchId, idx) { return `${_currentUid()}_${batchId}_${idx}`; }
+function _refImgKey(batchId, idx) { return `${_currentUid()}_${batchId}_ref_${idx}`; }
+
+function _historyKeysForBatch(batch) {
+    if (!batch?.id) return [];
+    const keys = [];
+    const imageCount = Math.max(batch.images ? batch.images.length : 0, Number(batch.imageCount || 0));
+    for (let i = 0; i < imageCount; i++) keys.push(_imgKey(batch.id, i));
+    const refCount = Math.max(batch.refImages ? batch.refImages.length : 0, Number(batch.params?.refImageCount || batch.refImageCount || 0));
+    for (let i = 0; i < refCount; i++) keys.push(_refImgKey(batch.id, i));
+    return keys;
+}
+
+function _removeFallbackKeys(keys) {
+    if (!keys.length) return;
+    try {
+        const raw = localStorage.getItem(_lsKey('fallback'));
+        if (!raw) return;
+        const fallback = JSON.parse(raw);
+        let changed = false;
+        keys.forEach(k => {
+            if (Object.prototype.hasOwnProperty.call(fallback, k)) {
+                delete fallback[k];
+                changed = true;
+            }
+        });
+        if (changed) localStorage.setItem(_lsKey('fallback'), JSON.stringify(fallback));
+    } catch {}
+}
+
+async function deleteHistoryBatchLocalData(batches) {
+    const keys = [];
+    (Array.isArray(batches) ? batches : [batches]).forEach(batch => {
+        keys.push(..._historyKeysForBatch(batch));
+    });
+    if (keys.length) {
+        await _idbDeleteKeys(keys);
+        _removeFallbackKeys(keys);
+    }
+}
 
 // ---- 判断是否已登录 ----
 function _isLoggedIn() { return !!getToken(); }
@@ -2097,6 +2326,8 @@ async function _loadFromServer() {
             model: b.model,
             time: b.time,
             text: b.text,
+            params: b.params || null,
+            refImages: [],
             images: (b.images || []).map(img => ({
                 b64_json: '',
                 // <img> 标签无法携带 header，通过 ?token= 鉴权
@@ -2113,21 +2344,33 @@ async function _saveToLocal() {
     try {
         const meta = state.history.map(b => ({
             id: b.id, model: b.model, time: b.time, text: b.text,
+            params: b.params || null,
             imageCount: b.images ? b.images.length : 0,
+            refImageCount: Math.max(b.refImages ? b.refImages.length : 0, Number(b.params?.refImageCount || 0)),
         }));
         localStorage.setItem(_lsKey('meta'), JSON.stringify(meta));
 
         let idbOk = true;
         for (const batch of state.history) {
-            if (!batch.images) continue;
-            for (let i = 0; i < batch.images.length; i++) {
-                const img = batch.images[i];
-                if (img._server) continue; // 服务器图片不存本地
-                const key = _imgKey(batch.id, i);
-                const raw = img.b64_json || img.url || '';
-                if (raw && !img._saved) {
-                    const ok = await _idbPut(key, raw);
-                    if (ok) { img._saved = true; } else { idbOk = false; }
+            if (batch.images) {
+                for (let i = 0; i < batch.images.length; i++) {
+                    const img = batch.images[i];
+                    if (img._server) continue; // 服务器图片不存本地
+                    const key = _imgKey(batch.id, i);
+                    const raw = img.b64_json || img.url || '';
+                    if (raw && !img._saved) {
+                        const ok = await _idbPut(key, raw);
+                        if (ok) { img._saved = true; } else { idbOk = false; }
+                    }
+                }
+            }
+            if (batch.refImages) {
+                for (let i = 0; i < batch.refImages.length; i++) {
+                    const raw = batch.refImages[i] || '';
+                    if (raw) {
+                        const ok = await _idbPut(_refImgKey(batch.id, i), raw);
+                        if (!ok) idbOk = false;
+                    }
                 }
             }
         }
@@ -2135,12 +2378,19 @@ async function _saveToLocal() {
             try {
                 const fallback = {};
                 for (const batch of state.history) {
-                    if (!batch.images) continue;
-                    for (let i = 0; i < batch.images.length; i++) {
-                        const img = batch.images[i];
-                        if (img._server) continue;
-                        const raw = img.b64_json || img.url || '';
-                        if (raw) fallback[_imgKey(batch.id, i)] = raw;
+                    if (batch.images) {
+                        for (let i = 0; i < batch.images.length; i++) {
+                            const img = batch.images[i];
+                            if (img._server) continue;
+                            const raw = img.b64_json || img.url || '';
+                            if (raw) fallback[_imgKey(batch.id, i)] = raw;
+                        }
+                    }
+                    if (batch.refImages) {
+                        for (let i = 0; i < batch.refImages.length; i++) {
+                            const raw = batch.refImages[i] || '';
+                            if (raw) fallback[_refImgKey(batch.id, i)] = raw;
+                        }
                     }
                 }
                 localStorage.setItem(_lsKey('fallback'), JSON.stringify(fallback));
@@ -2199,7 +2449,28 @@ async function _loadFromLocal() {
                 images.push({ b64_json: '', url: '', _saved: true, _expired: true });
             }
         }
-        state.history.push({ id: m.id, model: m.model, time: m.time, text: m.text, images });
+        const refImages = [];
+        const refCount = Number(m.refImageCount ?? m.params?.refImageCount ?? 0);
+        for (let i = 0; i < refCount; i++) {
+            const key = _refImgKey(m.id, i);
+            let data = await _idbGet(key);
+            if (!data && fallback[key]) {
+                data = fallback[key];
+                await _idbPut(key, data);
+            }
+            if (data && typeof data === 'string' && data.startsWith('data:image/')) {
+                refImages.push(data);
+            }
+        }
+        state.history.push({
+            id: m.id,
+            model: m.model,
+            time: m.time,
+            text: m.text,
+            params: m.params || null,
+            refImages,
+            images,
+        });
     }
 }
 
@@ -2264,10 +2535,7 @@ async function deleteBatch(batchId, silent) {
     if (idx === -1) return;
     const batch = state.history[idx];
 
-    if (batch.images) {
-        const keys = batch.images.map((_, i) => _imgKey(batchId, i));
-        await _idbDeleteKeys(keys);
-    }
+    await deleteHistoryBatchLocalData(batch);
     state.history.splice(idx, 1);
     await _saveToLocal();
 
@@ -2290,12 +2558,15 @@ async function deleteBatch(batchId, silent) {
 
 // ---- 清空所有历史 ----
 async function clearAllHistory() {
-    // 清除本地 IndexedDB 所有图片
+    // 清除本地 IndexedDB 所有生成图和参考图
     const allKeys = [];
     state.history.forEach(b => {
-        if (b.images) b.images.forEach((_, i) => allKeys.push(_imgKey(b.id, i)));
+        allKeys.push(..._historyKeysForBatch(b));
     });
-    if (allKeys.length) await _idbDeleteKeys(allKeys);
+    if (allKeys.length) {
+        await _idbDeleteKeys(allKeys);
+        _removeFallbackKeys(allKeys);
+    }
 
     state.history = [];
     localStorage.removeItem(_lsKey('meta'));
@@ -2325,11 +2596,18 @@ function bindEvents() {
     els.apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') connectApi(); });
     els.nodeSelect.addEventListener('change', () => {
         const next = getActiveBaseUrl();
+        updateCustomBaseVisibility();
         state.baseUrl = next;
-        localStorage.setItem('ai_node', next);
-        localStorage.setItem('ai_balance_base', next);
+        saveActiveNode(next);
         if (state.isConnected) addLog(`已切换 API 线路：${next}，后续请求将使用该线路`, 'success');
     });
+    els.customBaseInput?.addEventListener('input', () => {
+        if (!isCustomNodeSelected()) return;
+        const next = getActiveBaseUrl();
+        state.baseUrl = next;
+        saveActiveNode(next);
+    });
+    els.customBaseInput?.addEventListener('keydown', e => { if (e.key === 'Enter') connectApi(); });
     els.balanceBindBtn?.addEventListener('click', showBalanceBindDialog);
     els.balanceRefreshBtn?.addEventListener('click', refreshBalance);
 
@@ -2532,16 +2810,32 @@ async function init() {
             opt.textContent = label;
             els.nodeSelect.appendChild(opt);
         }
+        const customOpt = document.createElement('option');
+        customOpt.value = CUSTOM_NODE_VALUE;
+        customOpt.textContent = '自定义 Base URL';
+        els.nodeSelect.appendChild(customOpt);
     } catch (e) { console.warn('Failed to parse api nodes:', e); }
 
     // 恢复 API Key / 节点
     const savedKey = localStorage.getItem('ai_key');
     const savedNode = localStorage.getItem('ai_node');
+    const savedCustomBase = localStorage.getItem('ai_custom_base') || '';
     if (savedKey) els.apiKeyInput.value = savedKey;
-    if (savedNode) {
+    if (savedCustomBase && els.customBaseInput) els.customBaseInput.value = savedCustomBase;
+    if (savedNode === CUSTOM_NODE_VALUE) {
+        els.nodeSelect.value = CUSTOM_NODE_VALUE;
+    } else if (savedNode) {
         const opts = $$('#nodeSelect option');
-        for (const opt of opts) { if (opt.value === savedNode) { opt.selected = true; break; } }
+        let found = false;
+        for (const opt of opts) { if (normalizeBaseUrl(opt.value) === normalizeBaseUrl(savedNode)) { opt.selected = true; found = true; break; } }
+        if (!found && els.customBaseInput) {
+            els.nodeSelect.value = CUSTOM_NODE_VALUE;
+            els.customBaseInput.value = savedNode;
+            localStorage.setItem('ai_custom_base', normalizeBaseUrl(savedNode));
+            localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
+        }
     }
+    updateCustomBaseVisibility();
     state.baseUrl = getActiveBaseUrl();
     updateResolutionLabel();
 
