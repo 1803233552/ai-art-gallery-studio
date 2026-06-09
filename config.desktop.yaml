@@ -1,0 +1,94 @@
+# ==========================================================
+#  AI 创意工坊 - 桌面应用默认配置
+#  首次启动会复制到用户数据目录，之后用户可自行修改。
+# ==========================================================
+
+site:
+  icon: "✨"
+  name: "AI 创意工坊"
+  titles:
+    home: "AI 创意工坊"
+    play: "工作台 - AI 创意工坊"
+    docs: "API 开发文档 - AI 创意工坊"
+    gallery: "图片广场 - AI 创意工坊"
+    admin: "管理后台 - AI 创意工坊"
+
+server:
+  host: "127.0.0.1"
+  port: 18100
+  debug: false
+
+logging:
+  dir: "./logs"
+  level: "INFO"
+  keep_days: 7
+  cleanup_interval_minutes: 60
+
+api_nodes:
+  "本机 NewAPI": "127.0.0.1:3000"
+
+allowed_models:
+  - name: "gemini-3.1-flash-image"
+    ref_image: true
+    endpoint: "chat"
+    inject_ratio: true
+    plain_content: false
+
+  - name: "gpt-image-2"
+    ref_image: true
+    endpoint: "images"
+
+  - name: "gpt-image-2-2k"
+    ref_image: true
+    endpoint: "images"
+
+  - name: "gpt-image-2-4k"
+    ref_image: true
+    endpoint: "images"
+
+  - name: "grok-imagine-image-lite"
+    ref_image: false
+    endpoint: "chat"
+    inject_ratio: false
+    plain_content: true
+
+request_mode: "backend"
+
+gallery:
+  enabled: true
+  storage_path: "./data/gallery_images"
+  page_size: 24
+  default_sort: "likes"
+  max_image_size: 10
+  daily_upload_limit: 50
+  dedup: true
+  daily_comment_limit: 100
+
+history:
+  enabled: true
+  storage_path: "./data/history_images"
+  retention_minutes: 14400
+  max_images_per_user: 500
+
+newapi:
+  base_url: ""
+  admin_user_ids:
+    - 1
+
+admin:
+  path: "/admin"
+  username: "admin"
+  password: "admin"
+
+announcements:
+  enabled: false
+  home: ""
+  play: ""
+  docs: ""
+  gallery: ""
+
+database:
+  type: "sqlite"
+  path: "./data/ai-studio.db"
+
+secret_key: ""

@@ -1,0 +1,15 @@
+{
+  "name": "ai-art-gallery-studio-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tauri desktop wrapper for AI Art Gallery Studio",
+  "scripts": {
+    "tauri": "tauri",
+    "desktop:build-backend": "uv run python scripts/build_backend_sidecar.py",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  }
+}

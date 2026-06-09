@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI 创意工坊",
+  "version": "1.0.0",
+  "identifier": "com.aiartgallery.studio",
+  "build": {
+    "beforeBuildCommand": "npm run desktop:build-backend",
+    "beforeDevCommand": "npm run desktop:build-backend",
+    "frontendDist": "placeholder-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AI 创意工坊",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+        "dragDropEnabled": false,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/ai-studio-backend"],
+    "resources": [],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "installerHooks": "nsis-hooks.nsh"
+      }
+    }
+  }
+}
