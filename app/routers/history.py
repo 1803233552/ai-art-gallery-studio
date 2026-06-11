@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import shutil
+import sys
 import time
 import random
 from pathlib import Path
@@ -274,6 +276,24 @@ async def save_local_batch(request: Request):
 async def list_local_history(request: Request):
     _require_local_history(request)
     return {"success": True, "data": _read_local_manifest()}
+
+
+@router.post("/local/open-dir")
+async def open_local_history_dir(request: Request):
+    """打开本机历史图片目录，便于桌面版用户直接查看原图。"""
+    _require_local_history(request)
+    root = _local_root()
+    try:
+        if os.name == "nt":
+            os.startfile(str(root))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(root)])
+        else:
+            subprocess.Popen(["xdg-open", str(root)])
+    except Exception as exc:
+        log.warning("打开本机历史图片目录失败 path=%s error=%s", root, exc)
+        raise HTTPException(500, f"打开目录失败：{exc}") from exc
+    return {"success": True, "path": str(root)}
 
 
 @router.get("/local/image/{batch_id}/{filename}")

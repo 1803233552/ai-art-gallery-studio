@@ -1788,16 +1788,20 @@ let _expandTarget = null; // { model, date } — 生成时自动展开的目标
 
 function renderAllResults() {
     els.resultArea.innerHTML = '';
-    if (!state.history.length) return;
 
-    // 清空全部按钮
+    // 历史工具栏
     const toolbar = document.createElement('div');
     toolbar.className = 'r-toolbar';
-    toolbar.innerHTML = `<button class="r-clear-all" title="清空所有绘图历史">🗑️ 清空历史</button>`;
-    toolbar.querySelector('.r-clear-all').addEventListener('click', () => {
+    toolbar.innerHTML = `
+        <button class="r-open-local-dir" type="button" title="打开本机历史图片目录">📁 图片目录</button>
+        ${state.history.length ? '<button class="r-clear-all" type="button" title="清空所有绘图历史">🗑️ 清空历史</button>' : ''}`;
+    toolbar.querySelector('.r-open-local-dir').addEventListener('click', () => openLocalHistoryDir());
+    toolbar.querySelector('.r-clear-all')?.addEventListener('click', () => {
         _confirmDialog('确定要清空所有绘图历史记录吗？此操作不可撤销。', () => clearAllHistory());
     });
     els.resultArea.appendChild(toolbar);
+
+    if (!state.history.length) return;
 
     // 按模型分组
     const modelMap = {};
@@ -2805,6 +2809,23 @@ async function _deleteLocalFileImage(batchId, imgIndex) {
 async function _clearLocalFileHistory() {
     if (!_localFileHistoryEnabled()) return;
     try { await fetch('/api/history/local/clear', { method: 'DELETE' }); } catch {}
+}
+
+async function openLocalHistoryDir() {
+    if (!_localFileHistoryEnabled()) {
+        addLog('本机图片目录仅桌面/本机访问时可用', 'warn');
+        return;
+    }
+    try {
+        const resp = await fetch('/api/history/local/open-dir', { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.success === false) {
+            throw new Error(data.detail || data.message || `HTTP ${resp.status}`);
+        }
+        addLog(`已打开本机图片目录：${data.path || 'history_images/_local'}`, 'success');
+    } catch (err) {
+        addLog(`打开本机图片目录失败：${err.message}`, 'warn');
+    }
 }
 
 // ---- 服务器端存储（已登录用户）----
