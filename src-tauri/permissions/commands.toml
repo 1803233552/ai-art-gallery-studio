@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-save-image-file"
+description = "Allows saving generated images through a native file dialog."
+commands.allow = ["save_image_file"]
+
+[[permission]]
+identifier = "allow-native-image-edit"
+description = "Allows the desktop webview to call the native image edit HTTP bridge."
+commands.allow = ["native_image_edit"]

@@ -9,6 +9,7 @@
     "frontendDist": "placeholder-dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
