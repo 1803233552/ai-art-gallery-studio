@@ -1,7 +1,10 @@
 """绘图历史 API — 已登录用户的绘图记录临时存储到服务器"""
 import base64
 import asyncio
+import json
 import logging
+import os
+import shutil
 import time
 import random
 from pathlib import Path
@@ -46,11 +49,142 @@ def _cleanup_interval_sec() -> int:
     return int(get("history.cleanup_interval_minutes", 60)) * 60
 
 
-def _gen_filename(index: int) -> str:
+def _gen_filename(index: int, prefix: str = "img", suffix: str = ".png") -> str:
     """生成带 13 位时间戳 + 随机数 + 序号的文件名"""
     ts = int(time.time() * 1000)
     rnd = random.randint(1000, 9999)
-    return f"{ts}_{rnd}_{index}.png"
+    safe_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    return f"{ts}_{rnd}_{prefix}_{index}{safe_suffix}"
+
+
+def _safe_segment(value: str, fallback: str = "unknown") -> str:
+    safe = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in str(value or ""))
+    return safe or fallback
+
+
+def _local_history_enabled(request: Request) -> bool:
+    """桌面版/显式开启时允许无登录本机历史落盘。"""
+    client_host = request.client.host if request.client else ""
+    is_loopback = client_host in {"127.0.0.1", "::1", "localhost"}
+    return is_loopback and (
+        os.environ.get("AI_STUDIO_DESKTOP") == "1"
+        or bool(get("history.local_file_store", False))
+    )
+
+
+def _require_local_history(request: Request) -> None:
+    if not _local_history_enabled(request):
+        raise HTTPException(403, "本地历史文件存储未开启")
+
+
+def _local_root() -> Path:
+    root = _storage() / "_local"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _local_manifest_path() -> Path:
+    return _local_root() / "history.json"
+
+
+def _local_batch_dir(batch_id: str) -> Path:
+    path = _local_root() / _safe_segment(batch_id, "batch")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _read_local_manifest() -> list[dict]:
+    path = _local_manifest_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _write_local_manifest(items: list[dict]) -> None:
+    _local_manifest_path().write_text(
+        json.dumps(items, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _guess_suffix(source: str, img_bytes: bytes) -> str:
+    if source.startswith("data:image/"):
+        mime = source.split(";", 1)[0].split("/", 1)[1].lower()
+        return ".jpg" if mime == "jpeg" else f".{mime}"
+    if img_bytes.startswith(b"\xff\xd8"):
+        return ".jpg"
+    if img_bytes.startswith(b"\x89PNG"):
+        return ".png"
+    if img_bytes.startswith(b"RIFF") and img_bytes[8:12] == b"WEBP":
+        return ".webp"
+    if img_bytes.startswith(b"GIF"):
+        return ".gif"
+    return ".png"
+
+
+def _decode_image_base64(value: str) -> bytes:
+    raw = str(value or "").strip()
+    if "," in raw and raw.startswith("data:image/"):
+        raw = raw.split(",", 1)[1]
+    raw = "".join(raw.split())
+    try:
+        return base64.b64decode(raw)
+    except Exception:
+        return base64.urlsafe_b64decode(raw)
+
+
+async def _download_image_bytes(url: str, api_key: str = "") -> bytes | None:
+    headers_list = [{}]
+    if api_key:
+        headers_list.append({"Authorization": f"Bearer {api_key}"})
+    async with aiohttp.ClientSession() as session:
+        for headers in headers_list:
+            try:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status != 200:
+                        continue
+                    ct = resp.content_type or ""
+                    if not (ct.startswith("image/") or ct == "application/octet-stream"):
+                        continue
+                    data = await resp.read()
+                    if 0 < len(data) <= 20 * 1024 * 1024:
+                        return data
+            except aiohttp.ClientError:
+                continue
+    return None
+
+
+async def _image_payload_to_bytes(item, api_key: str = "") -> tuple[bytes, str] | None:
+    if isinstance(item, str):
+        raw = item
+        url = ""
+    elif isinstance(item, dict):
+        raw = item.get("b64_json") or item.get("data_url") or item.get("dataUrl") or item.get("image") or ""
+        url = item.get("url") or ""
+    else:
+        return None
+
+    if raw:
+        try:
+            data = _decode_image_base64(raw)
+            return data, _guess_suffix(str(raw), data)
+        except Exception:
+            return None
+    if url and url.startswith("data:image/"):
+        try:
+            data = _decode_image_base64(url)
+            return data, _guess_suffix(url, data)
+        except Exception:
+            return None
+    if url and url.startswith("http"):
+        data = await _download_image_bytes(url, api_key)
+        if data:
+            return data, _guess_suffix(url, data)
+    return None
 
 
 async def _auth(request: Request) -> dict:
@@ -65,6 +199,135 @@ async def _auth(request: Request) -> dict:
     if not user:
         raise HTTPException(401, "Token 无效")
     return user
+
+
+# ---- 桌面/本机历史文件存储 ----
+@router.post("/local/save")
+async def save_local_batch(request: Request):
+    """把本机历史图片落盘到 history.storage_path。保存输出图和输入参考图。"""
+    _require_local_history(request)
+    body = await request.json()
+    batch_id = body.get("batch_id", "")
+    model = body.get("model", "")
+    prompt = body.get("prompt", "")
+    batch_time = body.get("batch_time", "")
+    params = body.get("params") if isinstance(body.get("params"), dict) else None
+    images = body.get("images", [])
+    ref_images = body.get("ref_images", []) or body.get("refImages", [])
+    api_key = (body.get("api_key") or "").strip()
+
+    if not batch_id:
+        raise HTTPException(400, "缺少 batch_id")
+    if not images and not ref_images:
+        raise HTTPException(400, "缺少图片数据")
+
+    batch_dir = _local_batch_dir(batch_id)
+    saved_images = []
+    saved_refs = []
+
+    for i, img in enumerate(images):
+        converted = await _image_payload_to_bytes(img, api_key)
+        if not converted:
+            continue
+        img_bytes, suffix = converted
+        filename = _gen_filename(i, "out", suffix)
+        (batch_dir / filename).write_bytes(img_bytes)
+        saved_images.append({"index": i, "filename": filename})
+
+    for i, img in enumerate(ref_images):
+        converted = await _image_payload_to_bytes(img, api_key)
+        if not converted:
+            continue
+        img_bytes, suffix = converted
+        filename = _gen_filename(i, "ref", suffix)
+        (batch_dir / filename).write_bytes(img_bytes)
+        saved_refs.append({"index": i, "filename": filename})
+
+    if not saved_images and not saved_refs:
+        shutil.rmtree(batch_dir, ignore_errors=True)
+        raise HTTPException(400, "没有可保存的图片")
+
+    items = [item for item in _read_local_manifest() if item.get("id") != batch_id]
+    items.insert(0, {
+        "id": batch_id,
+        "model": model,
+        "text": prompt,
+        "time": batch_time,
+        "params": params,
+        "images": saved_images,
+        "ref_images": saved_refs,
+        "created_at": time.time(),
+    })
+
+    max_batches = int(get("history.local_max_batches", 200))
+    removed = items[max_batches:]
+    items = items[:max_batches]
+    for old in removed:
+        shutil.rmtree(_local_root() / _safe_segment(old.get("id", ""), "batch"), ignore_errors=True)
+    _write_local_manifest(items)
+    return {"success": True, "saved": len(saved_images), "saved_refs": len(saved_refs)}
+
+
+@router.get("/local/list")
+async def list_local_history(request: Request):
+    _require_local_history(request)
+    return {"success": True, "data": _read_local_manifest()}
+
+
+@router.get("/local/image/{batch_id}/{filename}")
+async def get_local_history_image(batch_id: str, filename: str, request: Request):
+    _require_local_history(request)
+    safe_name = Path(filename).name
+    filepath = _local_root() / _safe_segment(batch_id, "batch") / safe_name
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(404, "图片不存在")
+    return FileResponse(filepath)
+
+
+@router.delete("/local/image/{batch_id}/{image_index}")
+async def delete_local_history_image(batch_id: str, image_index: int, request: Request):
+    _require_local_history(request)
+    items = _read_local_manifest()
+    batch = next((item for item in items if item.get("id") == batch_id), None)
+    if not batch:
+        return {"success": True}
+
+    images = batch.get("images") or []
+    if 0 <= image_index < len(images):
+        filename = Path(str(images[image_index].get("filename", ""))).name
+        if filename:
+            fp = _local_root() / _safe_segment(batch_id, "batch") / filename
+            fp.unlink(missing_ok=True)
+        images.pop(image_index)
+        for idx, img in enumerate(images):
+            img["index"] = idx
+        batch["images"] = images
+        _write_local_manifest(items)
+    return {"success": True}
+
+
+@router.delete("/local/batch/{batch_id}")
+async def delete_local_batch(batch_id: str, request: Request):
+    _require_local_history(request)
+    items = [item for item in _read_local_manifest() if item.get("id") != batch_id]
+    shutil.rmtree(_local_root() / _safe_segment(batch_id, "batch"), ignore_errors=True)
+    _write_local_manifest(items)
+    return {"success": True}
+
+
+@router.delete("/local/clear")
+async def clear_local_history(request: Request):
+    _require_local_history(request)
+    root = _local_root()
+    for child in root.iterdir():
+        if child.name == "history.json":
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    _write_local_manifest([])
+    return {"success": True}
 
 
 # ---- 保存一个 batch ----

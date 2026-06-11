@@ -67,6 +67,8 @@ gallery:
 history:
   enabled: true
   storage_path: "./data/history_images"
+  local_file_store: true
+  local_max_batches: 200
   retention_minutes: 14400
   max_images_per_user: 500
 
