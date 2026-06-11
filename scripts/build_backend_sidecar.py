@@ -74,6 +74,10 @@ def main() -> None:
         "--hidden-import", "jinja2.ext",
         "--hidden-import", "multipart",
         "--hidden-import", "yaml",
+        # Pillow 的 AVIF 支持是可选能力，本项目不依赖。部分 Python/Pillow/PyInstaller
+        # 组合在 onefile 启动解包 PIL._avif*.pyd 时会出现 zlib 解压失败，排除它可避免启动报错。
+        "--exclude-module", "PIL._avif",
+        "--exclude-module", "PIL.AvifImagePlugin",
         str(ROOT / "app" / "desktop_backend.py"),
     ]
     run(pyinstaller_cmd)
