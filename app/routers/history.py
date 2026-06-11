@@ -245,6 +245,7 @@ async def save_local_batch(request: Request):
 
     if not saved_images and not saved_refs:
         shutil.rmtree(batch_dir, ignore_errors=True)
+        log.warning("本机历史保存失败：没有可保存的图片 batch=%s images=%s refs=%s", batch_id, len(images), len(ref_images))
         raise HTTPException(400, "没有可保存的图片")
 
     items = [item for item in _read_local_manifest() if item.get("id") != batch_id]
@@ -265,6 +266,7 @@ async def save_local_batch(request: Request):
     for old in removed:
         shutil.rmtree(_local_root() / _safe_segment(old.get("id", ""), "batch"), ignore_errors=True)
     _write_local_manifest(items)
+    log.info("本机历史保存成功 batch=%s outputs=%s refs=%s dir=%s", batch_id, len(saved_images), len(saved_refs), batch_dir)
     return {"success": True, "saved": len(saved_images), "saved_refs": len(saved_refs)}
 
 

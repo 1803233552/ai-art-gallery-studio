@@ -80,6 +80,7 @@ const state = {
     background: 'auto',
     moderation: 'auto',
     count: 1,
+    maxConcurrency: 6,
     refImages: [],          // base64 dataURLs
     history: [],            // [{id, model, time, images:[], text:'', params:{...}}]
     isGenerating: false,
@@ -119,6 +120,8 @@ const els = {
     compressionVal:    $('#compressionVal'),
     countSlider:       $('#countSlider'),
     countVal:          $('#countVal'),
+    concurrencySlider: $('#concurrencySlider'),
+    concurrencyVal:    $('#concurrencyVal'),
     refPnl:            $('#refPnl'),
     dropZone:          $('#dropZone'),
     refFileInput:      $('#refFileInput'),
@@ -911,6 +914,7 @@ function captureGenerationParams(prompt = state.prompt) {
         background: state.background,
         moderation: state.moderation,
         count: state.count,
+        maxConcurrency: state.maxConcurrency,
         baseUrl: getActiveBaseUrl(),
         refImageCount: state.refImages.length,
     };
@@ -975,6 +979,12 @@ async function applyGenerationParams(batch) {
         state.count = Number(params.count);
         if (els.countSlider) els.countSlider.value = state.count;
         if (els.countVal) els.countVal.textContent = state.count;
+    }
+
+    if (Number.isFinite(Number(params.maxConcurrency))) {
+        state.maxConcurrency = Math.max(1, Math.min(16, Number(params.maxConcurrency)));
+        if (els.concurrencySlider) els.concurrencySlider.value = state.maxConcurrency;
+        if (els.concurrencyVal) els.concurrencyVal.textContent = state.maxConcurrency;
     }
 
     if (params.baseUrl && els.nodeSelect) {
@@ -1238,9 +1248,7 @@ async function genWithRefImages(prompt, count, mode) {
 }
 
 function getRefImageConcurrency(count) {
-    if (state.resolution === '4k') return 1;
-    if (state.resolution === '2k') return Math.min(count, 4);
-    return Math.min(count, 6);
+    return Math.min(count, Math.max(1, Number(state.maxConcurrency) || 1));
 }
 
 async function runLimitedConcurrency(total, limit, worker) {
@@ -1889,7 +1897,7 @@ function renderAllResults() {
                     const actions = document.createElement('div');
                     actions.className = 'r-actions';
                     actions.innerHTML = `
-                        <button class="preview-btn" type="button" title="预览">🔍</button>
+                        <button class="copy-btn" type="button" title="复制图片">📋</button>
                         <button class="download-btn" type="button" title="下载">⬇️</button>
                         <button class="reuse-btn" type="button" title="加载生成参数到工作台">♻️</button>
                         ${isGalleryEnabled() ? '<button class="upload-btn" type="button" title="上传广场">🎨</button>' : ''}`;
@@ -1900,7 +1908,7 @@ function renderAllResults() {
 
                     const displaySrc = imgEl.src;
                     imgEl.addEventListener('click', () => openPreview(displaySrc));
-                    actions.querySelector('.preview-btn').addEventListener('click', () => openPreview(displaySrc));
+                    actions.querySelector('.copy-btn').addEventListener('click', () => copyImageToClipboard(displaySrc));
                     actions.querySelector('.download-btn').addEventListener('click', () => downloadImage(displaySrc, `${batch.id}_${i}`));
                     actions.querySelector('.reuse-btn').addEventListener('click', () => applyGenerationParams(batch));
                     if (isGalleryEnabled()) {
@@ -2352,6 +2360,69 @@ async function downloadImage(src, name) {
     addLog('下载失败：图片来源不支持', 'err');
 }
 
+async function _imageSrcToBlob(src) {
+    if (!src || src.includes('expired.svg') || (src.startsWith('data:image/svg+xml') && src.includes('%E5%9B%BE%E7%89%87%E5%B7%B2%E8%BF%87%E6%9C%9F'))) {
+        throw new Error('图片已过期');
+    }
+
+    if (src.startsWith('data:')) {
+        const resp = await fetch(src);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return await resp.blob();
+    }
+
+    if (src.startsWith('/')) {
+        const headers = {};
+        const token = getToken();
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const resp = await fetch(src, { headers });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return await resp.blob();
+    }
+
+    if (src.startsWith('http')) {
+        try {
+            const resp = await fetch(src);
+            if (resp.ok) return await resp.blob();
+        } catch {}
+
+        const resp = await fetch('/api/history/fetch-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: src, api_key: state.apiKey }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (!data.success || !data.b64_json) throw new Error(data.error || '无法获取图片');
+        const res2 = await fetch(`data:image/png;base64,${data.b64_json}`);
+        return await res2.blob();
+    }
+
+    throw new Error('图片来源不支持');
+}
+
+async function copyImageToClipboard(src) {
+    try {
+        if (!navigator.clipboard || !window.ClipboardItem) {
+            throw new Error('当前环境不支持复制图片到剪贴板');
+        }
+
+        let blob = await _imageSrcToBlob(src);
+        if (!blob.type || !blob.type.startsWith('image/')) {
+            throw new Error('不是有效图片');
+        }
+
+        await navigator.clipboard.write([
+            new ClipboardItem({ [blob.type || 'image/png']: blob })
+        ]);
+        showToast('图片已复制', 'success');
+        addLog('图片已复制到剪贴板', 'success');
+    } catch (err) {
+        showToast('复制失败：' + err.message, 'error');
+        addLog('复制失败：' + err.message, 'err');
+    }
+}
+
 // ============================================================
 // 上传到广场
 // ============================================================
@@ -2572,6 +2643,8 @@ function _localImageUrl(batchId, filename) {
     return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}`;
 }
 
+let _lastHistoryLoadStats = null;
+
 async function _saveToLocalFiles(batch) {
     if (!_localFileHistoryEnabled() || !batch || batch._localFileSaved) return;
     if ((!batch.images || !batch.images.length) && (!batch.refImages || !batch.refImages.length)) return;
@@ -2590,8 +2663,17 @@ async function _saveToLocalFiles(batch) {
                 api_key: state.apiKey || '',
             }),
         });
-        if (resp.ok) batch._localFileSaved = true;
-    } catch {}
+        if (resp.ok) {
+            batch._localFileSaved = true;
+            return true;
+        }
+        let detail = '';
+        try { detail = await resp.text(); } catch {}
+        addLog(`本机文件历史保存失败：HTTP ${resp.status}${detail ? ' · ' + detail.slice(0, 120) : ''}`, 'warn');
+    } catch (err) {
+        addLog(`本机文件历史保存失败：${err.message}`, 'warn');
+    }
+    return false;
 }
 
 async function _loadFromLocalFiles() {
@@ -2618,6 +2700,27 @@ async function _loadFromLocalFiles() {
     } catch { return []; }
 }
 
+function _countBatchImages(batches) {
+    return (batches || []).reduce((sum, batch) => sum + (Array.isArray(batch.images) ? batch.images.length : 0), 0);
+}
+
+function _logHistoryLoadDiagnostics(fileBatches) {
+    const s = _lastHistoryLoadStats;
+    if (!s) return;
+    const fileImageCount = _countBatchImages(fileBatches);
+    const level = s.missingImages > 0 ? 'warn' : '';
+    addLog(
+        `历史加载诊断：元数据 ${s.metaBatches} 组/${s.metaImages} 图，IndexedDB 命中 ${s.idbImages} 图，fallback 命中 ${s.fallbackImages} 图，缺失 ${s.missingImages} 图，旧临时链接 ${s.legacyHttpImages} 图，本机文件缓存 ${fileImageCount} 图`,
+        level
+    );
+    if (s.missingImages > 0) {
+        addLog('这些图片显示“已过期”的原因：历史元数据还在，但 WebView IndexedDB 里对应图片数据已经取不到。', 'warn');
+    }
+    if (s.legacyHttpImages > 0) {
+        addLog('检测到旧版 HTTP 临时图片链接，正在尝试迁移到本机文件缓存。', 'warn');
+    }
+}
+
 function _mergeHistoryBatches(sourceBatches) {
     if (!sourceBatches || !sourceBatches.length) return;
     const sourceMap = {};
@@ -2637,6 +2740,56 @@ function _mergeHistoryBatches(sourceBatches) {
             state.history.push(b);
         }
     });
+}
+
+function _replaceHistoryBatchesById(sourceBatches) {
+    if (!sourceBatches || !sourceBatches.length) return false;
+    const sourceMap = {};
+    sourceBatches.forEach(b => { sourceMap[b.id] = b; });
+
+    let changed = false;
+    for (let i = 0; i < state.history.length; i++) {
+        const replacement = sourceMap[state.history[i].id];
+        if (replacement) {
+            state.history[i] = replacement;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+async function _migrateLegacyHttpImagesToLocalFiles() {
+    try {
+        if (!_localFileHistoryEnabled()) return;
+        const candidates = state.history.filter(b =>
+            b && !b._localFileSaved && Array.isArray(b.images) && b.images.some(img => img?._legacyHttp)
+        );
+        if (!candidates.length) return;
+
+        let savedAny = false;
+        for (const batch of candidates) {
+            await _saveToLocalFiles(batch);
+            if (batch._localFileSaved) savedAny = true;
+        }
+        if (!savedAny) {
+            addLog('旧版 HTTP 临时图片迁移失败：链接可能已失效，或上游下载需要重新连接 API 后再试。', 'warn');
+            return;
+        }
+
+        const fileBatches = await _loadFromLocalFiles();
+        if (_replaceHistoryBatchesById(fileBatches)) {
+            const migratedIds = new Set(candidates.map(b => b.id));
+            state.history.forEach(batch => {
+                if (!migratedIds.has(batch.id) || !Array.isArray(batch.images)) return;
+                batch.images.forEach(img => {
+                    if (img && img._localFile) img._saved = false;
+                });
+            });
+            await _saveToLocal();
+            renderAllResults();
+            addLog('已将旧版历史图片迁移到本机文件缓存', 'success');
+        }
+    } catch {}
 }
 
 async function _deleteLocalFileBatch(batchId) {
@@ -2764,6 +2917,7 @@ async function _saveToLocal() {
 async function _loadFromLocal() {
     const raw = localStorage.getItem(_lsKey('meta'));
     if (!raw) {
+        _lastHistoryLoadStats = { metaBatches: 0, metaImages: 0, idbImages: 0, fallbackImages: 0, missingImages: 0, legacyHttpImages: 0 };
         // 向后兼容：尝试读取旧的非隔离 key（一次性迁移）
         const oldRaw = localStorage.getItem('ai_history_meta');
         if (oldRaw && _currentUid() === 'guest') {
@@ -2774,6 +2928,14 @@ async function _loadFromLocal() {
         return;
     }
     const meta = JSON.parse(raw);
+    _lastHistoryLoadStats = {
+        metaBatches: Array.isArray(meta) ? meta.length : 0,
+        metaImages: Array.isArray(meta) ? meta.reduce((sum, item) => sum + Number(item.imageCount || 0), 0) : 0,
+        idbImages: 0,
+        fallbackImages: 0,
+        missingImages: 0,
+        legacyHttpImages: 0,
+    };
     let fallback = {};
     try {
         const fb = localStorage.getItem(_lsKey('fallback'));
@@ -2788,14 +2950,18 @@ async function _loadFromLocal() {
             let data = await _idbGet(key);
             if (!data && fallback[key]) {
                 data = fallback[key];
+                _lastHistoryLoadStats.fallbackImages += 1;
                 await _idbPut(key, data);
+            } else if (data) {
+                _lastHistoryLoadStats.idbImages += 1;
             }
             if (data) {
                 // 判断顺序很重要：base64 检测必须在路径检测之前
                 // 因为 JPEG base64 以 /9j/ 开头，会被误判为 URL 路径
                 if (data.startsWith('http')) {
-                    // 外部 HTTP URL（临时 CDN 链接等）→ 已过期
-                    images.push({ b64_json: '', url: '', _saved: true, _expired: true });
+                    // 旧版本可能只保存了上游临时 HTTP 链接。先保留显示，加载后再尝试迁移到本机文件历史。
+                    _lastHistoryLoadStats.legacyHttpImages += 1;
+                    images.push({ b64_json: '', url: data, _saved: true, _legacyHttp: true });
                 } else if (data.startsWith('data:image/')) {
                     // 完整 DataURL → 提取纯 base64
                     const pure = data.replace(/^data:image\/[^;]+;base64,/, '');
@@ -2808,6 +2974,7 @@ async function _loadFromLocal() {
                     images.push({ b64_json: data, url: '', _saved: true });
                 }
             } else {
+                _lastHistoryLoadStats.missingImages += 1;
                 images.push({ b64_json: '', url: '', _saved: true, _expired: true });
             }
         }
@@ -2861,7 +3028,12 @@ async function loadHistory() {
         await _loadFromLocal();
 
         // 桌面/本机环境优先从文件历史补回 IndexedDB 过期或丢失的图片
-        _mergeHistoryBatches(await _loadFromLocalFiles());
+        const fileBatches = await _loadFromLocalFiles();
+        _mergeHistoryBatches(fileBatches);
+        _logHistoryLoadDiagnostics(fileBatches);
+
+        // 旧版本生成的 HTTP 临时链接如果仍可访问，自动迁移到本机文件历史，避免下次更新后丢失。
+        _migrateLegacyHttpImagesToLocalFiles();
 
         // 服务器存储未开启 → 只用本地数据
         if (!_serverHistoryEnabled()) {
@@ -2992,6 +3164,12 @@ function bindEvents() {
     els.countSlider.addEventListener('input', () => {
         state.count = parseInt(els.countSlider.value);
         els.countVal.textContent = state.count;
+    });
+
+    // 最大并发滑块
+    els.concurrencySlider.addEventListener('input', () => {
+        state.maxConcurrency = parseInt(els.concurrencySlider.value, 10);
+        els.concurrencyVal.textContent = state.maxConcurrency;
     });
 
     // 生成按钮
@@ -3169,7 +3347,10 @@ async function init() {
     const savedKey = localStorage.getItem('ai_key');
     const savedNode = localStorage.getItem('ai_node');
     const savedCustomBase = localStorage.getItem('ai_custom_base') || '';
-    if (savedKey) els.apiKeyInput.value = savedKey;
+    if (savedKey) {
+        els.apiKeyInput.value = savedKey;
+        state.apiKey = savedKey;
+    }
     if (savedCustomBase && els.customBaseInput) els.customBaseInput.value = savedCustomBase;
     if (savedNode === CUSTOM_NODE_VALUE) {
         els.nodeSelect.value = CUSTOM_NODE_VALUE;

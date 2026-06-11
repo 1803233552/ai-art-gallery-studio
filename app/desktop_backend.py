@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -35,6 +36,7 @@ def _bundled_path(relative: str) -> Path:
 def _ensure_config(data_dir: Path) -> Path:
     config_path = data_dir / "config.yaml"
     if config_path.exists():
+        _ensure_desktop_history_defaults(config_path)
         return config_path
 
     template = _bundled_path("config.desktop.yaml")
@@ -44,7 +46,61 @@ def _ensure_config(data_dir: Path) -> Path:
         raise FileNotFoundError("找不到桌面版默认配置 config.desktop.yaml")
 
     shutil.copyfile(template, config_path)
+    _ensure_desktop_history_defaults(config_path)
     return config_path
+
+
+def _ensure_desktop_history_defaults(config_path: Path) -> None:
+    """给旧版首次生成的 config.yaml 补齐桌面本机历史配置。"""
+    try:
+        content = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    needs_local_store = "local_file_store:" not in content
+    needs_max_batches = "local_max_batches:" not in content
+    if not needs_local_store and not needs_max_batches:
+        return
+
+    lines = content.splitlines()
+    history_start = next((i for i, line in enumerate(lines) if re.match(r"^history:\s*$", line)), None)
+    if history_start is None:
+        lines.extend([
+            "",
+            "history:",
+            "  enabled: true",
+            "  storage_path: \"./data/history_images\"",
+            "  local_file_store: true",
+            "  local_max_batches: 200",
+        ])
+        try:
+            config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+        return
+
+    history_end = len(lines)
+    for i in range(history_start + 1, len(lines)):
+        if lines[i] and not lines[i].startswith((" ", "\t")):
+            history_end = i
+            break
+
+    insert_at = history_start + 1
+    for i in range(history_start + 1, history_end):
+        if re.match(r"^\s*storage_path\s*:", lines[i]):
+            insert_at = i + 1
+            break
+
+    additions = []
+    if needs_local_store:
+        additions.append("  local_file_store: true")
+    if needs_max_batches:
+        additions.append("  local_max_batches: 200")
+    lines[insert_at:insert_at] = additions
+    try:
+        config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def main() -> None:
