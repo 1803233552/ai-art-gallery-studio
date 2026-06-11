@@ -109,6 +109,8 @@ async def proxy_request(path: str, request: Request):
     for key in ("Authorization", "Content-Type"):
         if key in request.headers:
             forward_headers[key] = request.headers[key]
+    forward_headers["Accept-Encoding"] = "identity"
+    forward_headers["Connection"] = "close"
 
     try:
         method = request.method.lower()
@@ -117,11 +119,18 @@ async def proxy_request(path: str, request: Request):
         # 若只是读取响应时 TLS 断链，重试会造成重复生成。GET/轮询类请求可安全重试。
         max_attempts = 2 if method == "get" else 1
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=600, connect=30, sock_connect=30, sock_read=600)
+        connector = aiohttp.TCPConnector(
+            limit=0,
+            force_close=True,
+            enable_cleanup_closed=True,
+        )
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             for attempt in range(1, max_attempts + 1):
                 kwargs = {
                     "headers": forward_headers,
-                    "timeout": aiohttp.ClientTimeout(total=600),
+                    "timeout": timeout,
+                    "compress": False,
                 }
                 if body:
                     kwargs["data"] = body

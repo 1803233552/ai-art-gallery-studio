@@ -438,6 +438,88 @@ async function requestJsonWithUrlFallback(endpoint, fetchOptions, bodyOrForm, is
     return safeJson(retryResp);
 }
 
+function parseNativeJson(text) {
+    try {
+        return JSON.parse(text);
+    } catch {
+        throw new Error(`原生请求返回非 JSON 数据：${String(text || '').slice(0, 160)}`);
+    }
+}
+
+function errorMessage(err) {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string') return err;
+    try {
+        return JSON.stringify(err);
+    } catch {
+        return String(err);
+    }
+}
+
+async function requestNativeImageEdit(prompt, count, imageOptions) {
+    const invoke = _getTauriInvoke();
+    if (!invoke) throw new Error('当前环境不支持原生图生图请求');
+    const text = await invoke('native_image_edit', {
+        baseUrl: getActiveBaseUrl(),
+        apiKey: state.apiKey,
+        model: state.selectedModel,
+        prompt,
+        count,
+        optionsJson: JSON.stringify(imageOptions),
+        refImages: state.refImages.slice(0, 4),
+    });
+    return parseNativeJson(text);
+}
+
+async function requestNativeImageEditWithUrlFallback(prompt, count) {
+    const imageOptions = getImageOptions();
+    const data = await requestNativeImageEdit(prompt, count, imageOptions);
+    if (!data?.error || !isUnsupportedResponseFormatError(parseError(data))) return data;
+
+    addLog('当前节点不支持 response_format=url，原生请求已自动降级为默认返回格式重试', 'warn');
+    const retryOptions = { ...imageOptions };
+    delete retryOptions.response_format;
+    return requestNativeImageEdit(prompt, count, retryOptions);
+}
+
+async function requestDirectImageEditWithUrlFallback(prompt, count) {
+    const endpoint = `${getActiveBaseUrl()}/v1/images/edits`;
+    const imageOptions = getImageOptions();
+    const makeForm = (options) => {
+        const form = new FormData();
+        form.append('model', state.selectedModel);
+        form.append('prompt', prompt);
+        form.append('n', String(count));
+        Object.entries(options).forEach(([key, value]) => form.append(key, String(value)));
+        state.refImages.forEach((b64, i) => {
+            const blob = dataURLtoBlob(b64);
+            form.append('image', blob, `ref_${i}.png`);
+        });
+        return form;
+    };
+
+    const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${state.apiKey}` },
+        body: makeForm(imageOptions),
+    });
+    try {
+        return await safeJson(resp);
+    } catch (err) {
+        if (!isUnsupportedResponseFormatError(err)) throw err;
+        addLog('当前节点不支持 response_format=url，直连请求已自动降级为默认返回格式重试', 'warn');
+    }
+
+    const retryOptions = { ...imageOptions };
+    delete retryOptions.response_format;
+    const retryResp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${state.apiKey}` },
+        body: makeForm(retryOptions),
+    });
+    return safeJson(retryResp);
+}
+
 // ============================================================
 // 日志系统
 // ============================================================
@@ -834,7 +916,22 @@ function captureGenerationParams(prompt = state.prompt) {
     };
 }
 
-function applyGenerationParams(batch) {
+async function _refImageToDataUrl(src) {
+    if (!src) return null;
+    if (src.startsWith('data:image/')) return src;
+    try {
+        const resp = await fetch(src);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        if (blob.type && !blob.type.startsWith('image/')) return null;
+        const b64 = await _blobToBase64(blob);
+        return b64 ? `data:${blob.type || 'image/png'};base64,${b64}` : null;
+    } catch {
+        return null;
+    }
+}
+
+async function applyGenerationParams(batch) {
     const params = batch?.params || {};
     const model = params.model || batch?.model || '';
     const prompt = params.prompt ?? batch?.text ?? '';
@@ -897,8 +994,9 @@ function applyGenerationParams(batch) {
     const canUseRefImages = !model || getModelCfg(model).ref_image !== false;
     const hasRefMeta = Array.isArray(batch?.refImages) || Number.isFinite(Number(params.refImageCount));
     if (hasRefMeta) {
+        const sourceRefs = Array.isArray(batch?.refImages) ? batch.refImages.filter(Boolean).slice(0, 4) : [];
         const refs = canUseRefImages
-            ? (Array.isArray(batch?.refImages) ? batch.refImages.filter(Boolean).slice(0, 4) : [])
+            ? (await Promise.all(sourceRefs.map(_refImageToDataUrl))).filter(Boolean).slice(0, 4)
             : [];
         state.refImages = refs;
         renderRefThumbs();
@@ -1059,7 +1157,10 @@ async function generateImages() {
         };
         state.history.unshift(batch);
         const removedBatches = state.history.splice(HISTORY_MAX_BATCHES);
-        if (removedBatches.length) await deleteHistoryBatchLocalData(removedBatches);
+        if (removedBatches.length) {
+            await deleteHistoryBatchLocalData(removedBatches);
+            await Promise.all(removedBatches.map(b => _deleteLocalFileBatch(b.id)));
+        }
         await saveHistory();
 
         renderResultBatch(batch);
@@ -1102,20 +1203,82 @@ async function genStandard(prompt, count, mode) {
 }
 
 async function genWithRefImages(prompt, count, mode) {
-    const images = await genWithRefImagesOnce(prompt, count, mode);
-    if (images.length >= count || count <= 1) return images.slice(0, count);
-
-    addLog(`当前节点图生图只返回 ${images.length}/${count} 张，自动补齐剩余 ${count - images.length} 张`, 'warn');
-    while (images.length < count) {
-        const nextIndex = images.length + 1;
-        const more = await genWithRefImagesOnce(prompt, 1, mode, `补齐 ${nextIndex}/${count}`);
-        if (!more.length) break;
-        images.push(...more);
+    if (count <= 1) {
+        const images = await genWithRefImagesOnce(prompt, 1, mode);
+        renderPartialGeneratedImages(images);
+        return images.slice(0, 1);
     }
+
+    const concurrency = getRefImageConcurrency(count);
+    addLog(`图生图多张将按 ${concurrency} 路并发发送 ${count} 个单张请求，避免上游忽略 n=${count}`, 'warn');
+    const images = [];
+    const errors = [];
+
+    await runLimitedConcurrency(count, concurrency, async (i) => {
+        const label = `并发 ${i + 1}/${count}`;
+        try {
+            const result = await genWithRefImagesOnce(prompt, 1, mode, label);
+            const spaceLeft = count - images.length;
+            const accepted = spaceLeft > 0 ? result.slice(0, spaceLeft) : [];
+            if (!accepted.length) {
+                addLog(`${label} 未返回图片`, 'warn');
+                return;
+            }
+            images.push(...accepted);
+            renderPartialGeneratedImages(images);
+        } catch (err) {
+            errors.push(err);
+            addLog(`${label} 失败：${err.message}`, 'warn');
+        }
+    });
+
+    if (!images.length) throw errors[0] || new Error('图生图未返回图片');
+    if (images.length < count) addLog(`并发生成完成，但只拿到 ${images.length}/${count} 张，已保留成功图片`, 'warn');
     return images.slice(0, count);
 }
 
+function getRefImageConcurrency(count) {
+    if (state.resolution === '4k') return 1;
+    if (state.resolution === '2k') return Math.min(count, 4);
+    return Math.min(count, 6);
+}
+
+async function runLimitedConcurrency(total, limit, worker) {
+    let next = 0;
+    const workers = Array.from({ length: Math.min(total, Math.max(1, limit)) }, async () => {
+        while (next < total) {
+            const index = next;
+            next += 1;
+            await worker(index);
+        }
+    });
+    await Promise.all(workers);
+}
+
 async function genWithRefImagesOnce(prompt, count, mode, label = '') {
+    if (mode === 'backend' && _getTauriInvoke()) {
+        const directStarted = Date.now();
+        try {
+            addLog(`${label ? label + '：' : ''}直连请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${getPixelSize()}`);
+            const directData = await requestDirectImageEditWithUrlFallback(prompt, count);
+            if (directData.error) throw new Error(parseError(directData));
+            return resolveImageResponse(directData, count, mode);
+        } catch (err) {
+            const elapsed = Date.now() - directStarted;
+            if (elapsed > 10000) throw new Error(`直连图生图请求失败：${errorMessage(err)}`);
+            addLog(`直连不可用，改用原生请求：${errorMessage(err)}`, 'warn');
+        }
+
+        try {
+            addLog(`${label ? label + '：' : ''}原生请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${getPixelSize()}`);
+            const nativeData = await requestNativeImageEditWithUrlFallback(prompt, count);
+            if (nativeData.error) throw new Error(parseError(nativeData));
+            return resolveImageResponse(nativeData, count, mode);
+        } catch (err) {
+            throw new Error(errorMessage(err));
+        }
+    }
+
     const endpoint = mode === 'backend' ? '/api/proxy/v1/images/edits' : `${getActiveBaseUrl()}/v1/images/edits`;
     const headers = buildHeadersMultipart();
     const imageOptions = getImageOptions();
@@ -1726,10 +1889,10 @@ function renderAllResults() {
                     const actions = document.createElement('div');
                     actions.className = 'r-actions';
                     actions.innerHTML = `
-                        <button class="preview-btn" title="预览">🔍</button>
-                        <button class="download-btn" title="下载">⬇️</button>
-                        <button class="reuse-btn" title="加载生成参数到工作台">♻️</button>
-                        ${isGalleryEnabled() ? '<button class="upload-btn" title="上传广场">🎨</button>' : ''}`;
+                        <button class="preview-btn" type="button" title="预览">🔍</button>
+                        <button class="download-btn" type="button" title="下载">⬇️</button>
+                        <button class="reuse-btn" type="button" title="加载生成参数到工作台">♻️</button>
+                        ${isGalleryEnabled() ? '<button class="upload-btn" type="button" title="上传广场">🎨</button>' : ''}`;
 
                     item.appendChild(imgEl);
                     item.appendChild(overlay);
@@ -1826,6 +1989,7 @@ async function deleteSingleImage(batchId, imgIndex) {
     if (batch.images.length === 0) {
         await deleteBatch(batchId);
     } else {
+        await _deleteLocalFileImage(batchId, imgIndex);
         await _saveToLocal();
         renderAllResults();
     }
@@ -1940,6 +2104,67 @@ function showSkeletonResults(count) {
     els.resultArea.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+function imageResultToDisplaySrc(img) {
+    if (!img || img._expired || (!img.b64_json && !img.url)) return _expiredSvg();
+    return img.b64_json
+        ? `data:image/png;base64,${img.b64_json.replace(/^data:image\/[^;]+;base64,/, '')}`
+        : (img.url || _expiredSvg());
+}
+
+function createPartialResultCard(img, index) {
+    const src = imageResultToDisplaySrc(img);
+    const item = document.createElement('div');
+    item.className = 'r-item partial-generated-card';
+    item.setAttribute('data-partial-generated', 'true');
+
+    const imgEl = document.createElement('img');
+    imgEl.alt = `generated-${index + 1}`;
+    imgEl.loading = 'lazy';
+    imgEl.src = src;
+    imgEl.onerror = function() { this.onerror = null; this.src = _expiredSvg(); };
+
+    const overlay = document.createElement('div');
+    overlay.className = 'r-overlay';
+    overlay.innerHTML = '<button class="ro-btn" type="button" title="已生成，等待剩余图片完成">✅</button>';
+
+    const actions = document.createElement('div');
+    actions.className = 'r-actions';
+    actions.innerHTML = `
+        <button class="preview-btn" type="button" title="预览">🔍</button>
+        <button class="download-btn" type="button" title="下载">⬇️</button>`;
+
+    item.appendChild(imgEl);
+    item.appendChild(overlay);
+    item.appendChild(actions);
+
+    imgEl.addEventListener('click', () => openPreview(imgEl.src));
+    actions.querySelector('.preview-btn').addEventListener('click', () => openPreview(imgEl.src));
+    actions.querySelector('.download-btn').addEventListener('click', () => downloadImage(imgEl.src, `partial_${Date.now()}_${index}`));
+    return item;
+}
+
+function renderPartialGeneratedImages(images) {
+    if (!Array.isArray(images) || !images.length) return;
+
+    const shown = els.resultArea.querySelectorAll('[data-partial-generated="true"]').length;
+    const nextImages = images.slice(shown);
+    if (!nextImages.length) return;
+
+    nextImages.forEach((img, offset) => {
+        const index = shown + offset;
+        const card = createPartialResultCard(img, index);
+        const skeleton = els.resultArea.querySelector('[data-skeleton="true"]');
+        if (skeleton) {
+            skeleton.replaceWith(card);
+            return;
+        }
+        const grid = els.resultArea.querySelector('.r-grid');
+        if (grid) grid.prepend(card);
+    });
+
+    els.resultArea.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function removeSkeletonResults() {
     els.resultArea.querySelectorAll('[data-skeleton="true"]').forEach(el => el.remove());
     // 清理可能留下的空临时分组
@@ -1980,8 +2205,53 @@ function _isMobile() {
     return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
-/** 触发一个 Blob/ObjectURL 下载，桌面端直接下载，移动端弹出新标签让用户长按保存 */
-function _triggerBlobDownload(blobUrl, filename) {
+function _getTauriInvoke() {
+    if (window.__TAURI__?.core?.invoke) {
+        return (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+    }
+    if (window.__TAURI__?.invoke) {
+        return (cmd, args) => window.__TAURI__.invoke(cmd, args);
+    }
+    if (window.__TAURI_INTERNALS__?.invoke) {
+        return (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+    }
+    return null;
+}
+
+function _blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const text = String(reader.result || '');
+            resolve(text.includes(',') ? text.split(',')[1] : text);
+        };
+        reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
+        reader.readAsDataURL(blob);
+    });
+}
+
+async function _saveBlobWithTauri(blob, filename) {
+    const invoke = _getTauriInvoke();
+    if (!invoke) return false;
+    try {
+        const base64Data = await _blobToBase64(blob);
+        const savedPath = await invoke('save_image_file', { filename, base64Data });
+        if (savedPath) {
+            addLog(`已保存到：${savedPath}`, 'success');
+        } else {
+            addLog('已取消保存', 'warn');
+        }
+        return true;
+    } catch (err) {
+        addLog(`原生保存失败，尝试浏览器下载：${err.message}`, 'warn');
+        return false;
+    }
+}
+
+/** 触发一个 Blob/ObjectURL 下载，桌面端优先用原生保存对话框，移动端弹出新标签让用户长按保存 */
+async function _triggerBlobDownload(blobUrl, filename, blob = null) {
+    if (blob && await _saveBlobWithTauri(blob, filename)) return false;
+
     if (_isMobile()) {
         // 移动端：在新窗口打开图片，提示用户长按保存
         const w = window.open(blobUrl, '_blank');
@@ -1990,6 +2260,7 @@ function _triggerBlobDownload(blobUrl, filename) {
         } else {
             showToast('📱 图片已在新页面打开，长按图片保存到相册', 'success');
         }
+        return true;
     } else {
         const a = document.createElement('a');
         a.href = blobUrl;
@@ -1997,6 +2268,7 @@ function _triggerBlobDownload(blobUrl, filename) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+        return true;
     }
 }
 
@@ -2010,9 +2282,9 @@ async function downloadImage(src, name) {
             const res = await fetch(src);
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
-            _triggerBlobDownload(url, filename);
+            const browserDownloadStarted = await _triggerBlobDownload(url, filename, blob);
             setTimeout(() => URL.revokeObjectURL(url), 30000);
-            addLog('下载已开始', 'success');
+            if (browserDownloadStarted) addLog('下载已开始', 'success');
             return;
         } catch (err) {
             addLog('下载失败：' + err.message, 'err');
@@ -2030,9 +2302,9 @@ async function downloadImage(src, name) {
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const blob = await resp.blob();
             const url = URL.createObjectURL(blob);
-            _triggerBlobDownload(url, filename);
+            const browserDownloadStarted = await _triggerBlobDownload(url, filename, blob);
             setTimeout(() => URL.revokeObjectURL(url), 30000);
-            addLog('下载已开始', 'success');
+            if (browserDownloadStarted) addLog('下载已开始', 'success');
             return;
         } catch (err) {
             addLog('下载失败：' + err.message, 'err');
@@ -2047,9 +2319,9 @@ async function downloadImage(src, name) {
             if (resp.ok) {
                 const blob = await resp.blob();
                 const url = URL.createObjectURL(blob);
-                _triggerBlobDownload(url, filename);
+                const browserDownloadStarted = await _triggerBlobDownload(url, filename, blob);
                 setTimeout(() => URL.revokeObjectURL(url), 30000);
-                addLog('下载已开始', 'success');
+                if (browserDownloadStarted) addLog('下载已开始', 'success');
                 return;
             }
         } catch {}
@@ -2066,9 +2338,9 @@ async function downloadImage(src, name) {
                     const res2 = await fetch(`data:image/png;base64,${data.b64_json}`);
                     const blob = await res2.blob();
                     const blobUrl = URL.createObjectURL(blob);
-                    _triggerBlobDownload(blobUrl, filename);
+                    const browserDownloadStarted = await _triggerBlobDownload(blobUrl, filename, blob);
                     setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-                    addLog('下载已开始', 'success');
+                    if (browserDownloadStarted) addLog('下载已开始', 'success');
                     return;
                 }
             }
@@ -2292,6 +2564,96 @@ function _serverHistoryEnabled() {
     return els.playground.dataset.historyServer === 'true' && _isLoggedIn();
 }
 
+function _localFileHistoryEnabled() {
+    return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
+}
+
+function _localImageUrl(batchId, filename) {
+    return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}`;
+}
+
+async function _saveToLocalFiles(batch) {
+    if (!_localFileHistoryEnabled() || !batch || batch._localFileSaved) return;
+    if ((!batch.images || !batch.images.length) && (!batch.refImages || !batch.refImages.length)) return;
+    try {
+        const resp = await fetch('/api/history/local/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                batch_id: batch.id,
+                model: batch.model,
+                prompt: batch.text,
+                batch_time: batch.time,
+                params: batch.params || null,
+                images: (batch.images || []).map(img => ({ b64_json: img.b64_json || '', url: img.url || '' })),
+                ref_images: (batch.refImages || []).filter(Boolean),
+                api_key: state.apiKey || '',
+            }),
+        });
+        if (resp.ok) batch._localFileSaved = true;
+    } catch {}
+}
+
+async function _loadFromLocalFiles() {
+    if (!_localFileHistoryEnabled()) return [];
+    try {
+        const resp = await fetch('/api/history/local/list');
+        const data = await resp.json();
+        if (!data.success) return [];
+        return (data.data || []).map(b => ({
+            id: b.id,
+            model: b.model,
+            time: b.time,
+            text: b.text,
+            params: b.params || null,
+            refImages: (b.ref_images || []).map(img => _localImageUrl(b.id, img.filename)),
+            images: (b.images || []).map(img => ({
+                b64_json: '',
+                url: _localImageUrl(b.id, img.filename),
+                _saved: true,
+                _localFile: true,
+            })),
+            _localFileSaved: true,
+        }));
+    } catch { return []; }
+}
+
+function _mergeHistoryBatches(sourceBatches) {
+    if (!sourceBatches || !sourceBatches.length) return;
+    const sourceMap = {};
+    sourceBatches.forEach(b => { sourceMap[b.id] = b; });
+
+    for (let i = 0; i < state.history.length; i++) {
+        const local = state.history[i];
+        const allExpired = !local.images || local.images.every(img => img._expired || (!img.b64_json && !img.url));
+        if (allExpired && sourceMap[local.id]) {
+            state.history[i] = sourceMap[local.id];
+        }
+    }
+
+    const localIds = new Set(state.history.map(b => b.id));
+    sourceBatches.forEach(b => {
+        if (!localIds.has(b.id)) {
+            state.history.push(b);
+        }
+    });
+}
+
+async function _deleteLocalFileBatch(batchId) {
+    if (!_localFileHistoryEnabled()) return;
+    try { await fetch(`/api/history/local/batch/${encodeURIComponent(batchId)}`, { method: 'DELETE' }); } catch {}
+}
+
+async function _deleteLocalFileImage(batchId, imgIndex) {
+    if (!_localFileHistoryEnabled()) return;
+    try { await fetch(`/api/history/local/image/${encodeURIComponent(batchId)}/${imgIndex}`, { method: 'DELETE' }); } catch {}
+}
+
+async function _clearLocalFileHistory() {
+    if (!_localFileHistoryEnabled()) return;
+    try { await fetch('/api/history/local/clear', { method: 'DELETE' }); } catch {}
+}
+
 // ---- 服务器端存储（已登录用户）----
 async function _saveToServer(batch) {
     const token = getToken();
@@ -2478,9 +2840,12 @@ async function _loadFromLocal() {
 async function saveHistory() {
     // 始终保存本地一份
     await _saveToLocal();
+    const newest = state.history[0];
+    if (newest) {
+        await _saveToLocalFiles(newest);
+    }
     // 服务器存储开启时，也同步到服务器
     if (_serverHistoryEnabled()) {
-        const newest = state.history[0];
         if (newest && !newest._serverSaved) {
             await _saveToServer(newest);
             newest._serverSaved = true;
@@ -2495,6 +2860,9 @@ async function loadHistory() {
         // 始终先从本地加载
         await _loadFromLocal();
 
+        // 桌面/本机环境优先从文件历史补回 IndexedDB 过期或丢失的图片
+        _mergeHistoryBatches(await _loadFromLocalFiles());
+
         // 服务器存储未开启 → 只用本地数据
         if (!_serverHistoryEnabled()) {
             renderAllResults();
@@ -2503,28 +2871,7 @@ async function loadHistory() {
 
         // 服务器存储开启 → 加载服务器数据，按 batch 补齐本地过期的
         const serverData = await _loadFromServer();
-        if (serverData.length) {
-            // 建立服务器 batch 索引
-            const serverMap = {};
-            serverData.forEach(b => { serverMap[b.id] = b; });
-
-            // 逐 batch 检查本地，过期的用服务器数据替换
-            for (let i = 0; i < state.history.length; i++) {
-                const local = state.history[i];
-                const allExpired = !local.images || local.images.every(img => img._expired || (!img.b64_json && !img.url));
-                if (allExpired && serverMap[local.id]) {
-                    state.history[i] = serverMap[local.id];
-                }
-            }
-
-            // 补入本地没有但服务器有的 batch
-            const localIds = new Set(state.history.map(b => b.id));
-            serverData.forEach(b => {
-                if (!localIds.has(b.id)) {
-                    state.history.push(b);
-                }
-            });
-        }
+        _mergeHistoryBatches(serverData);
         renderAllResults();
     } catch {}
 }
@@ -2536,6 +2883,7 @@ async function deleteBatch(batchId, silent) {
     const batch = state.history[idx];
 
     await deleteHistoryBatchLocalData(batch);
+    await _deleteLocalFileBatch(batchId);
     state.history.splice(idx, 1);
     await _saveToLocal();
 
@@ -2571,6 +2919,7 @@ async function clearAllHistory() {
     state.history = [];
     localStorage.removeItem(_lsKey('meta'));
     localStorage.removeItem(_lsKey('fallback'));
+    await _clearLocalFileHistory();
 
     // 同步清空服务器
     if (_serverHistoryEnabled()) {
