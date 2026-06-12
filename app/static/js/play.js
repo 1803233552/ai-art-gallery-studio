@@ -83,6 +83,9 @@ const state = {
     maxConcurrency: 6,
     refImages: [],          // base64 dataURLs
     history: [],            // [{id, model, time, images:[], text:'', params:{...}}]
+    queue: [],              // queued generation task snapshots
+    activeTaskId: '',
+    queueSeq: 0,
     isGenerating: false,
     isConnected: false,
     logs: [],
@@ -250,7 +253,8 @@ function normalizeBaseUrl(url) {
     return `http://${value}`;
 }
 
-function getActiveBaseUrl() {
+function getActiveBaseUrl(ctx = null) {
+    if (ctx?.baseUrl) return normalizeBaseUrl(ctx.baseUrl);
     const selected = els.nodeSelect?.value?.trim() || '';
     if (selected === CUSTOM_NODE_VALUE) {
         return normalizeBaseUrl(els.customBaseInput?.value || localStorage.getItem('ai_custom_base') || state.baseUrl || '');
@@ -286,21 +290,21 @@ function getPixelSize(ratio = state.ratio, resolution = state.resolution) {
     return SIZE_MAP[resolution]?.[ratio] || SIZE_MAP['1k']['1:1'];
 }
 
-function getImageOptions() {
-    const outputFormat = state.outputFormat || 'png';
+function getImageOptions(ctx = state) {
+    const outputFormat = ctx.outputFormat || 'png';
     const body = {
-        size: getPixelSize(),
-        resolution: state.resolution || '1k',
-        quality: state.quality || 'auto',
-        background: state.background || 'auto',
-        moderation: state.moderation || 'auto',
+        size: getPixelSize(ctx.ratio, ctx.resolution),
+        resolution: ctx.resolution || '1k',
+        quality: ctx.quality || 'auto',
+        background: ctx.background || 'auto',
+        moderation: ctx.moderation || 'auto',
         // 优先让上游返回图片 URL，避免几 MB 的 base64 JSON 走长连接返回时更容易触发 TLS 断链。
         // 前端已有 URL 图片下载/缓存逻辑；若上游不支持该字段，通常会忽略。
         response_format: 'url',
         output_format: outputFormat,
     };
-    if ((outputFormat === 'jpeg' || outputFormat === 'webp') && Number.isFinite(state.outputCompression)) {
-        body.output_compression = state.outputCompression;
+    if ((outputFormat === 'jpeg' || outputFormat === 'webp') && Number.isFinite(ctx.outputCompression)) {
+        body.output_compression = ctx.outputCompression;
     }
     return body;
 }
@@ -459,42 +463,42 @@ function errorMessage(err) {
     }
 }
 
-async function requestNativeImageEdit(prompt, count, imageOptions) {
+async function requestNativeImageEdit(prompt, count, imageOptions, ctx = state) {
     const invoke = _getTauriInvoke();
     if (!invoke) throw new Error('当前环境不支持原生图生图请求');
     const text = await invoke('native_image_edit', {
-        baseUrl: getActiveBaseUrl(),
-        apiKey: state.apiKey,
-        model: state.selectedModel,
+        baseUrl: getActiveBaseUrl(ctx),
+        apiKey: ctx.apiKey || state.apiKey,
+        model: ctx.model || ctx.selectedModel,
         prompt,
         count,
         optionsJson: JSON.stringify(imageOptions),
-        refImages: state.refImages.slice(0, 4),
+        refImages: (ctx.refImages || state.refImages).slice(0, 4),
     });
     return parseNativeJson(text);
 }
 
-async function requestNativeImageEditWithUrlFallback(prompt, count) {
-    const imageOptions = getImageOptions();
-    const data = await requestNativeImageEdit(prompt, count, imageOptions);
+async function requestNativeImageEditWithUrlFallback(prompt, count, ctx = state) {
+    const imageOptions = getImageOptions(ctx);
+    const data = await requestNativeImageEdit(prompt, count, imageOptions, ctx);
     if (!data?.error || !isUnsupportedResponseFormatError(parseError(data))) return data;
 
     addLog('当前节点不支持 response_format=url，原生请求已自动降级为默认返回格式重试', 'warn');
     const retryOptions = { ...imageOptions };
     delete retryOptions.response_format;
-    return requestNativeImageEdit(prompt, count, retryOptions);
+    return requestNativeImageEdit(prompt, count, retryOptions, ctx);
 }
 
-async function requestDirectImageEditWithUrlFallback(prompt, count) {
-    const endpoint = `${getActiveBaseUrl()}/v1/images/edits`;
-    const imageOptions = getImageOptions();
+async function requestDirectImageEditWithUrlFallback(prompt, count, ctx = state) {
+    const endpoint = `${getActiveBaseUrl(ctx)}/v1/images/edits`;
+    const imageOptions = getImageOptions(ctx);
     const makeForm = (options) => {
         const form = new FormData();
-        form.append('model', state.selectedModel);
+        form.append('model', ctx.model || ctx.selectedModel);
         form.append('prompt', prompt);
         form.append('n', String(count));
         Object.entries(options).forEach(([key, value]) => form.append(key, String(value)));
-        state.refImages.forEach((b64, i) => {
+        (ctx.refImages || state.refImages).forEach((b64, i) => {
             const blob = dataURLtoBlob(b64);
             form.append('image', blob, `ref_${i}.png`);
         });
@@ -503,7 +507,7 @@ async function requestDirectImageEditWithUrlFallback(prompt, count) {
 
     const resp = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${state.apiKey}` },
+        headers: { 'Authorization': `Bearer ${ctx.apiKey || state.apiKey}` },
         body: makeForm(imageOptions),
     });
     try {
@@ -517,7 +521,7 @@ async function requestDirectImageEditWithUrlFallback(prompt, count) {
     delete retryOptions.response_format;
     const retryResp = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${state.apiKey}` },
+        headers: { 'Authorization': `Bearer ${ctx.apiKey || state.apiKey}` },
         body: makeForm(retryOptions),
     });
     return safeJson(retryResp);
@@ -540,6 +544,63 @@ function addLog(text, type = '') {
     els.logBody.appendChild(entry);
     els.logBody.scrollTop = els.logBody.scrollHeight;
     state.logs.push({ ts: Date.now(), text, type });
+}
+
+function ensureQueuePanel() {
+    if (document.getElementById('queueBox') || !els.logBody?.parentElement) return;
+    const box = document.createElement('div');
+    box.id = 'queueBox';
+    box.className = 'queue-box';
+    box.hidden = true;
+    box.innerHTML = '<div class="queue-head"><span>生成队列</span><small id="queueSummary">空闲</small></div><div class="queue-list" id="queueList"></div>';
+    els.logBody.parentElement.appendChild(box);
+}
+
+function updateGenerateButton() {
+    if (!els.generateBtn) return;
+    els.generateBtn.disabled = !state.isConnected;
+    els.generateBtn.textContent = state.isGenerating ? '加入队列' : '生成图片';
+}
+
+function renderQueuePanel() {
+    ensureQueuePanel();
+    const box = document.getElementById('queueBox');
+    const list = document.getElementById('queueList');
+    const summary = document.getElementById('queueSummary');
+    if (!box || !list || !summary) return;
+
+    const active = state.queue.find(t => t.status === 'running');
+    const pending = state.queue.filter(t => t.status === 'queued');
+    box.hidden = !active && pending.length === 0;
+    summary.textContent = active
+        ? `生成中 · 等待 ${pending.length}`
+        : (pending.length ? `等待 ${pending.length}` : '空闲');
+
+    list.innerHTML = '';
+    state.queue.forEach(task => {
+        const row = document.createElement('div');
+        row.className = `queue-item ${task.status}`;
+        const prompt = task.prompt.length > 46 ? `${task.prompt.slice(0, 46)}…` : task.prompt;
+        row.innerHTML = `
+            <div class="queue-main">
+                <div class="queue-title"><span class="queue-badge">#${task.seq}</span><strong>${escHtml(task.model || '未知模型')}</strong><span>${task.count} 张</span></div>
+                <div class="queue-prompt">${escHtml(prompt || '(无提示词)')}</div>
+            </div>
+            <div class="queue-actions">
+                <span class="queue-status">${task.status === 'running' ? '生成中' : '等待中'}</span>
+                ${task.status === 'queued' ? '<button class="queue-cancel" type="button">取消</button>' : ''}
+            </div>`;
+        row.querySelector('.queue-cancel')?.addEventListener('click', () => cancelQueuedTask(task.id));
+        list.appendChild(row);
+    });
+}
+
+function cancelQueuedTask(taskId) {
+    const idx = state.queue.findIndex(t => t.id === taskId && t.status === 'queued');
+    if (idx < 0) return;
+    const [task] = state.queue.splice(idx, 1);
+    addLog(`已取消队列任务 #${task.seq}`);
+    renderQueuePanel();
 }
 
 function escHtml(s) {
@@ -819,7 +880,7 @@ async function connectApi() {
         if (getBalanceToken()) refreshBalance();
 
         renderModelChips();
-        els.generateBtn.disabled = false;
+        updateGenerateButton();
     } catch (err) {
         els.connTag.hidden = true;
         setStatus('error');
@@ -827,6 +888,7 @@ async function connectApi() {
     } finally {
         els.connectBtn.disabled = false;
         els.connectBtn.textContent = '连接';
+        updateGenerateButton();
     }
 }
 
@@ -1115,54 +1177,119 @@ function renderRefThumbs() {
 // 生成图片
 // ============================================================
 async function generateImages() {
-    if (state.isGenerating) return;
+    return enqueueGenerationTask();
+}
+
+function createGenerationTask() {
     if (!state.isConnected) { addLog('请先连接 API', 'warn'); return; }
     if (!state.selectedModel) { addLog('请先选择模型', 'warn'); return; }
 
     const prompt = els.promptInput.value.trim();
     if (!prompt) { addLog('请输入提示词', 'warn'); return; }
 
+    const params = captureGenerationParams(prompt);
+    return {
+        id: uid(),
+        seq: ++state.queueSeq,
+        status: 'queued',
+        prompt,
+        finalPrompt: '',
+        model: state.selectedModel,
+        ratio: state.ratio,
+        resolution: state.resolution,
+        quality: state.quality,
+        outputFormat: state.outputFormat,
+        outputCompression: state.outputCompression,
+        background: state.background,
+        moderation: state.moderation,
+        count: state.count,
+        maxConcurrency: state.maxConcurrency,
+        baseUrl: getActiveBaseUrl(),
+        apiKey: state.apiKey,
+        refImages: state.refImages.slice(0, 4),
+        params,
+        createdAt: Date.now(),
+    };
+}
+
+function enqueueGenerationTask() {
+    const task = createGenerationTask();
+    if (!task) return;
+    state.prompt = task.prompt;
+    state.queue.push(task);
+    addLog(`已加入生成队列 #${task.seq}：${task.model} · ${task.count} 张`, state.isGenerating ? 'success' : '');
+    renderQueuePanel();
+    updateGenerateButton();
+    processGenerationQueue();
+}
+
+async function processGenerationQueue() {
+    if (state.isGenerating) return;
+    const task = state.queue.find(t => t.status === 'queued');
+    if (!task) {
+        renderQueuePanel();
+        updateGenerateButton();
+        return;
+    }
+
+    task.status = 'running';
+    state.activeTaskId = task.id;
     state.isGenerating = true;
-    state.prompt = prompt;
+    renderQueuePanel();
+    updateGenerateButton();
+
+    try {
+        await runGenerationTask(task);
+    } finally {
+        state.queue = state.queue.filter(t => t.id !== task.id);
+        state.activeTaskId = '';
+        state.isGenerating = false;
+        stopLogTimer();
+        renderQueuePanel();
+        updateGenerateButton();
+        processGenerationQueue();
+    }
+}
+
+async function runGenerationTask(task) {
+    const modelCfg = getModelCfg(task.model);
+    const isChat = modelCfg.endpoint === 'chat';
+    const hasRef = task.refImages.length > 0;
+
     setStatus('run');
     startLogTimer();
-    els.generateBtn.disabled = true;
-    els.generateBtn.textContent = '生成中...';
-    showSkeletonResults(state.count);
-    startProgressAnimation(state.count);
-
-    const mode = getRequestMode();
-    const modelCfg = getModelCfg(state.selectedModel);
-    const isChat = modelCfg.endpoint === 'chat';
-    const hasRef = state.refImages.length > 0;
+    showSkeletonResults(task.count, task);
+    startProgressAnimation(task.count);
 
     // Chat 模式：仅当模型配置 inject_ratio !== false 时才在 prompt 中注入比例描述
     // grok / 其他自带尺寸能力的模型应设 inject_ratio: false，避免污染 prompt
-    let finalPrompt = prompt;
+    let finalPrompt = task.prompt;
     if (isChat && modelCfg.inject_ratio !== false) {
-        finalPrompt = `Make the aspect ratio ${state.ratio} (${getPixelSize()}), ${prompt}`;
+        finalPrompt = `Make the aspect ratio ${task.ratio} (${getPixelSize(task.ratio, task.resolution)}), ${task.prompt}`;
     }
+    task.finalPrompt = finalPrompt;
 
     try {
         let images = [];
+        const mode = getRequestMode();
         if (isChat) {
-            images = await genGemini(finalPrompt, state.count, mode);
+            images = await genGemini(finalPrompt, task.count, mode, task);
         } else if (hasRef) {
-            images = await genWithRefImages(finalPrompt, state.count, mode);
+            images = await genWithRefImages(finalPrompt, task.count, mode, task);
         } else {
-            images = await genStandard(finalPrompt, state.count, mode);
+            images = await genStandard(finalPrompt, task.count, mode, task);
         }
 
         // 保存到历史
         const batchId = uid();
-        const refImages = hasRef ? state.refImages.slice(0, 4) : [];
+        const refImages = hasRef ? task.refImages.slice(0, 4) : [];
         const batch = {
             id: batchId,
-            model: state.selectedModel,
+            model: task.model,
             time: new Date().toLocaleString('zh-CN'),
             images,
-            text: prompt,
-            params: captureGenerationParams(prompt),
+            text: task.prompt,
+            params: task.params,
             refImages,
         };
         state.history.unshift(batch);
@@ -1176,28 +1303,23 @@ async function generateImages() {
         renderResultBatch(batch);
         finishProgress();
         setStatus('ok');
-        addLog(`生成完成！共 ${images.length} 张图片`, 'success');
+        addLog(`队列任务 #${task.seq} 生成完成！共 ${images.length} 张图片`, 'success');
 
     } catch (err) {
         setStatus('error');
-        addLog('生成失败：' + err.message, 'err');
+        addLog(`队列任务 #${task.seq} 生成失败：${err.message}`, 'err');
         removeSkeletonResults();
         stopProgressAnimation();
         els.progressWrap.hidden = true;
-    } finally {
-        state.isGenerating = false;
-        els.generateBtn.disabled = false;
-        els.generateBtn.textContent = '生成图片';
-        stopLogTimer();
     }
 }
 
-async function genStandard(prompt, count, mode) {
-    const endpoint = mode === 'backend' ? '/api/proxy/v1/images/generations' : `${getActiveBaseUrl()}/v1/images/generations`;
-    const headers = buildHeaders(mode);
-    const imageOptions = getImageOptions();
+async function genStandard(prompt, count, mode, ctx = state) {
+    const endpoint = mode === 'backend' ? '/api/proxy/v1/images/generations' : `${getActiveBaseUrl(ctx)}/v1/images/generations`;
+    const headers = buildHeaders(mode, ctx);
+    const imageOptions = getImageOptions(ctx);
     const body = {
-        model: state.selectedModel,
+        model: ctx.model || ctx.selectedModel,
         prompt,
         n: count,
         ...imageOptions,
@@ -1209,17 +1331,17 @@ async function genStandard(prompt, count, mode) {
         body: JSON.stringify(body),
     }, body);
     if (data.error) throw new Error(parseError(data));
-    return resolveImageResponse(data, count, mode);
+    return resolveImageResponse(data, count, mode, ctx);
 }
 
-async function genWithRefImages(prompt, count, mode) {
+async function genWithRefImages(prompt, count, mode, ctx = state) {
     if (count <= 1) {
-        const images = await genWithRefImagesOnce(prompt, 1, mode);
+        const images = await genWithRefImagesOnce(prompt, 1, mode, '', ctx);
         renderPartialGeneratedImages(images);
         return images.slice(0, 1);
     }
 
-    const concurrency = getRefImageConcurrency(count);
+    const concurrency = getRefImageConcurrency(count, ctx);
     addLog(`图生图多张将按 ${concurrency} 路并发发送 ${count} 个单张请求，避免上游忽略 n=${count}`, 'warn');
     const images = [];
     const errors = [];
@@ -1227,7 +1349,7 @@ async function genWithRefImages(prompt, count, mode) {
     await runLimitedConcurrency(count, concurrency, async (i) => {
         const label = `并发 ${i + 1}/${count}`;
         try {
-            const result = await genWithRefImagesOnce(prompt, 1, mode, label);
+            const result = await genWithRefImagesOnce(prompt, 1, mode, label, ctx);
             const spaceLeft = count - images.length;
             const accepted = spaceLeft > 0 ? result.slice(0, spaceLeft) : [];
             if (!accepted.length) {
@@ -1247,8 +1369,8 @@ async function genWithRefImages(prompt, count, mode) {
     return images.slice(0, count);
 }
 
-function getRefImageConcurrency(count) {
-    return Math.min(count, Math.max(1, Number(state.maxConcurrency) || 1));
+function getRefImageConcurrency(count, ctx = state) {
+    return Math.min(count, Math.max(1, Number(ctx.maxConcurrency) || 1));
 }
 
 async function runLimitedConcurrency(total, limit, worker) {
@@ -1263,14 +1385,14 @@ async function runLimitedConcurrency(total, limit, worker) {
     await Promise.all(workers);
 }
 
-async function genWithRefImagesOnce(prompt, count, mode, label = '') {
+async function genWithRefImagesOnce(prompt, count, mode, label = '', ctx = state) {
     if (mode === 'backend' && _getTauriInvoke()) {
         const directStarted = Date.now();
         try {
-            addLog(`${label ? label + '：' : ''}直连请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${getPixelSize()}`);
-            const directData = await requestDirectImageEditWithUrlFallback(prompt, count);
+            addLog(`${label ? label + '：' : ''}直连请求图生图 ${count} 张，参考图 ${(ctx.refImages || []).length} 张，size=${getPixelSize(ctx.ratio, ctx.resolution)}`);
+            const directData = await requestDirectImageEditWithUrlFallback(prompt, count, ctx);
             if (directData.error) throw new Error(parseError(directData));
-            return resolveImageResponse(directData, count, mode);
+            return resolveImageResponse(directData, count, mode, ctx);
         } catch (err) {
             const elapsed = Date.now() - directStarted;
             if (elapsed > 10000) throw new Error(`直连图生图请求失败：${errorMessage(err)}`);
@@ -1278,39 +1400,39 @@ async function genWithRefImagesOnce(prompt, count, mode, label = '') {
         }
 
         try {
-            addLog(`${label ? label + '：' : ''}原生请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${getPixelSize()}`);
-            const nativeData = await requestNativeImageEditWithUrlFallback(prompt, count);
+            addLog(`${label ? label + '：' : ''}原生请求图生图 ${count} 张，参考图 ${(ctx.refImages || []).length} 张，size=${getPixelSize(ctx.ratio, ctx.resolution)}`);
+            const nativeData = await requestNativeImageEditWithUrlFallback(prompt, count, ctx);
             if (nativeData.error) throw new Error(parseError(nativeData));
-            return resolveImageResponse(nativeData, count, mode);
+            return resolveImageResponse(nativeData, count, mode, ctx);
         } catch (err) {
             throw new Error(errorMessage(err));
         }
     }
 
-    const endpoint = mode === 'backend' ? '/api/proxy/v1/images/edits' : `${getActiveBaseUrl()}/v1/images/edits`;
-    const headers = buildHeadersMultipart();
-    const imageOptions = getImageOptions();
+    const endpoint = mode === 'backend' ? '/api/proxy/v1/images/edits' : `${getActiveBaseUrl(ctx)}/v1/images/edits`;
+    const headers = buildHeadersMultipart(ctx);
+    const imageOptions = getImageOptions(ctx);
     const form = new FormData();
-    form.append('model', state.selectedModel);
+    form.append('model', ctx.model || ctx.selectedModel);
     form.append('prompt', prompt);
     form.append('n', String(count));
     Object.entries(imageOptions).forEach(([key, value]) => {
         form.append(key, String(value));
     });
-    state.refImages.forEach((b64, i) => {
+    (ctx.refImages || state.refImages).forEach((b64, i) => {
         const blob = dataURLtoBlob(b64);
         form.append('image', blob, `ref_${i}.png`);
     });
-    addLog(`${label ? label + '：' : ''}请求图生图 ${count} 张，参考图 ${state.refImages.length} 张，size=${imageOptions.size}`);
+    addLog(`${label ? label + '：' : ''}请求图生图 ${count} 张，参考图 ${(ctx.refImages || []).length} 张，size=${imageOptions.size}`);
     const data = await requestJsonWithUrlFallback(endpoint, { method: 'POST', headers, body: form }, form, true);
     if (data.error) throw new Error(parseError(data));
-    return resolveImageResponse(data, count, mode);
+    return resolveImageResponse(data, count, mode, ctx);
 }
 
-async function resolveImageResponse(data, count, mode) {
+async function resolveImageResponse(data, count, mode, ctx = state) {
     const directImages = extractImageResults(data);
     if (directImages.length > 0) {
-        return cacheHttpImages(directImages.slice(0, count));
+        return cacheHttpImages(directImages.slice(0, count), ctx);
     }
 
     const taskIds = extractTaskIds(data);
@@ -1318,11 +1440,11 @@ async function resolveImageResponse(data, count, mode) {
         addLog(`任务已提交，开始轮询 ${taskIds.length} 个 task_id`);
         const results = [];
         for (const taskId of taskIds) {
-            const taskImages = await pollImageTask(taskId, mode, count - results.length);
+            const taskImages = await pollImageTask(taskId, mode, count - results.length, ctx);
             results.push(...taskImages);
             if (results.length >= count) break;
         }
-        return cacheHttpImages(results.slice(0, count));
+        return cacheHttpImages(results.slice(0, count), ctx);
     }
 
     throw new Error('图片接口返回格式无法解析：未找到图片或 task_id');
@@ -1412,17 +1534,17 @@ function normalizeImageString(value) {
     return null;
 }
 
-async function pollImageTask(taskId, mode, expectedCount = 1) {
+async function pollImageTask(taskId, mode, expectedCount = 1, ctx = state) {
     const endpoint = mode === 'backend'
         ? `/api/proxy/v1/tasks/${encodeURIComponent(taskId)}`
-        : `${getActiveBaseUrl()}/v1/tasks/${encodeURIComponent(taskId)}`;
-    const timeoutMs = state.resolution === '4k' || state.quality === 'high' ? 240000 : 180000;
+        : `${getActiveBaseUrl(ctx)}/v1/tasks/${encodeURIComponent(taskId)}`;
+    const timeoutMs = ctx.resolution === '4k' || ctx.quality === 'high' ? 240000 : 180000;
     const started = Date.now();
     let lastProgress = -1;
 
     await sleep(10000);
     while (Date.now() - started < timeoutMs) {
-        const resp = await fetch(endpoint, { headers: buildHeaders(mode) });
+        const resp = await fetch(endpoint, { headers: buildHeaders(mode, ctx) });
         const data = await safeJson(resp);
         if (data.error) throw new Error(parseError(data));
 
@@ -1457,11 +1579,11 @@ async function pollImageTask(taskId, mode, expectedCount = 1) {
     throw new Error(ERROR_MAP.poll_timeout);
 }
 
-async function cacheHttpImages(images) {
+async function cacheHttpImages(images, ctx = state) {
     const out = [];
     for (const img of images) {
         if (!img.b64_json && img.url && img.url.startsWith('http')) {
-            const b64 = await _urlToBase64(img.url, state.apiKey);
+            const b64 = await _urlToBase64(img.url, ctx.apiKey || state.apiKey);
             if (b64) {
                 out.push({ b64_json: b64, url: '' });
                 continue;
@@ -1472,11 +1594,11 @@ async function cacheHttpImages(images) {
     return out;
 }
 
-async function genGemini(prompt, count, mode) {
+async function genGemini(prompt, count, mode, ctx = state) {
     const images = [];
-    const modelId = state.selectedModel;
-    const hasRef = state.refImages.length > 0;
-    if (hasRef) addLog(`Chat 图生图模式，参考图 ${state.refImages.length} 张`);
+    const modelId = ctx.model || ctx.selectedModel;
+    const hasRef = (ctx.refImages || []).length > 0;
+    if (hasRef) addLog(`Chat 图生图模式，参考图 ${(ctx.refImages || []).length} 张`);
     for (let i = 0; i < count; i++) {
         let attempt = 0;
         let lastErr;
@@ -1484,11 +1606,11 @@ async function genGemini(prompt, count, mode) {
             attempt++;
             try {
                 addLog(`Chat 生成第 ${i + 1}/${count} 张（尝试 ${attempt}/3）…`);
-                const img = await genOneGemini(prompt, modelId, mode);
+                const img = await genOneGemini(prompt, modelId, mode, ctx);
                 // HTTP URL 的图片（如 Gemini CDN 临时链接）立即下载转 base64，防止过期丢失
                 if (!img.b64_json && img.url && img.url.startsWith('http')) {
                     try {
-                        const b64 = await _urlToBase64(img.url);
+                        const b64 = await _urlToBase64(img.url, ctx.apiKey || state.apiKey);
                         if (b64) { img.b64_json = b64; img.url = ''; }
                     } catch {}
                 }
@@ -1507,9 +1629,9 @@ async function genGemini(prompt, count, mode) {
     return images;
 }
 
-async function genOneGemini(prompt, modelId, mode) {
-    const endpoint = mode === 'backend' ? '/api/proxy/v1/chat/completions' : `${getActiveBaseUrl()}/v1/chat/completions`;
-    const headers = buildHeaders(mode);
+async function genOneGemini(prompt, modelId, mode, ctx = state) {
+    const endpoint = mode === 'backend' ? '/api/proxy/v1/chat/completions' : `${getActiveBaseUrl(ctx)}/v1/chat/completions`;
+    const headers = buildHeaders(mode, ctx);
     const modelCfg = getModelCfg(modelId);
     const plainContent = modelCfg.plain_content === true;
 
@@ -1517,13 +1639,13 @@ async function genOneGemini(prompt, modelId, mode) {
     //   plain_content=true  → 纯字符串（兼容 grok 等只接受 string 的模型）
     //   plain_content=false → 数组格式（支持多模态参考图的模型，如 Gemini）
     let msgContent;
-    if (plainContent && state.refImages.length === 0) {
+    if (plainContent && (ctx.refImages || []).length === 0) {
         // 纯字符串，无参考图
         msgContent = prompt;
     } else {
         // 数组格式，支持图文混合
         const parts = [];
-        state.refImages.forEach(dataUrl => {
+        (ctx.refImages || []).forEach(dataUrl => {
             parts.push({ type: 'image_url', image_url: { url: dataUrl } });
         });
         parts.push({ type: 'text', text: prompt });
@@ -1727,30 +1849,32 @@ function _blobToBase64(blob) {
     });
 }
 
-function buildHeaders(mode) {
+function buildHeaders(mode, ctx = state) {
+    const apiKey = ctx.apiKey || state.apiKey;
     if (mode === 'backend') {
         return {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${state.apiKey}`,
-            'X-Target-Base': getActiveBaseUrl(),
+            'Authorization': `Bearer ${apiKey}`,
+            'X-Target-Base': getActiveBaseUrl(ctx),
         };
     }
     return {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${state.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
     };
 }
 
-function buildHeadersMultipart() {
+function buildHeadersMultipart(ctx = state) {
     const mode = getRequestMode();
+    const apiKey = ctx.apiKey || state.apiKey;
     if (mode === 'backend') {
         return {
-            'Authorization': `Bearer ${state.apiKey}`,
-            'X-Target-Base': getActiveBaseUrl(),
+            'Authorization': `Bearer ${apiKey}`,
+            'X-Target-Base': getActiveBaseUrl(ctx),
         };
     }
     return {
-        'Authorization': `Bearer ${state.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
     };
 }
 
@@ -2044,12 +2168,12 @@ function renderResultBatch(batch) {
 
 // ---- 骨架屏：嵌入分组结构内部 ----
 
-function showSkeletonResults(count) {
+function showSkeletonResults(count, ctx = state) {
     // 移除旧骨架
     removeSkeletonResults();
     if (!count) return;
 
-    const model = state.selectedModel || '未知模型';
+    const model = ctx.model || ctx.selectedModel || state.selectedModel || '未知模型';
     const todayDate = _extractDate(new Date().toLocaleString('zh-CN'));
 
     // 先渲染已有历史（确保分组结构存在）
@@ -3204,9 +3328,6 @@ function bindEvents() {
 
     // 生成按钮
     els.generateBtn.addEventListener('click', () => {
-        if (state.refImages.length > 0) {
-            showSkeletonResults(state.count);
-        }
         generateImages();
     });
 
@@ -3398,6 +3519,8 @@ async function init() {
     updateCustomBaseVisibility();
     state.baseUrl = getActiveBaseUrl();
     updateResolutionLabel();
+    ensureQueuePanel();
+    updateGenerateButton();
 
     bindEvents();
     renderUserPanel();
