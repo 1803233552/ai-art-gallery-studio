@@ -1,9 +1,11 @@
 """绘图历史 API — 已登录用户的绘图记录临时存储到服务器"""
 import base64
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import shutil
 import sys
@@ -90,9 +92,190 @@ def _local_manifest_path() -> Path:
 
 
 def _local_batch_dir(batch_id: str) -> Path:
+    """旧版 batch 目录。保留用于兼容历史记录读取/删除。"""
     path = _local_root() / _safe_segment(batch_id, "batch")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _local_relative_path(path: Path) -> str:
+    return path.relative_to(_local_root()).as_posix()
+
+
+def _local_path_from_relative(value: str) -> Path:
+    parts = [Path(part).name for part in str(value or "").replace("\\", "/").split("/") if part and part not in {".", ".."}]
+    if not parts or parts[0] not in {"output", "input"}:
+        raise HTTPException(400, "非法文件路径")
+    return _local_root().joinpath(*parts)
+
+
+def _batch_date_folder(batch_time: str) -> str:
+    match = re.search(r"(\d{4})[\/\-.年](\d{1,2})[\/\-.月](\d{1,2})", str(batch_time or ""))
+    if match:
+        return f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    return time.strftime("%Y-%m-%d")
+
+
+def _output_prefix(model: str) -> str:
+    prefix = _safe_segment(model, "AIStudio")[:48].strip("_-")
+    return prefix or "AIStudio"
+
+
+def _next_numbered_path(directory: Path, prefix: str, suffix: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)")
+    max_index = 0
+    for child in directory.iterdir():
+        if not child.is_file():
+            continue
+        match = pattern.match(child.name)
+        if match:
+            max_index = max(max_index, int(match.group(1)))
+    safe_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    next_index = max_index + 1
+    while True:
+        path = directory / f"{prefix}_{next_index:05d}{safe_suffix}"
+        if not path.exists():
+            return path
+        next_index += 1
+
+
+def _write_numbered_output(directory: Path, prefix: str, suffix: str, img_bytes: bytes) -> Path:
+    while True:
+        filepath = _next_numbered_path(directory, prefix, suffix)
+        try:
+            with filepath.open("xb") as f:
+                f.write(img_bytes)
+            return filepath
+        except FileExistsError:
+            continue
+
+
+def _save_local_output_image(index: int, img_bytes: bytes, suffix: str, model: str, batch_time: str) -> dict:
+    out_dir = _local_root() / "output" / _batch_date_folder(batch_time)
+    filepath = _write_numbered_output(out_dir, _output_prefix(model), suffix, img_bytes)
+    return {"index": index, "filename": filepath.name, "path": _local_relative_path(filepath)}
+
+
+def _save_local_input_image(index: int, img_bytes: bytes, suffix: str) -> dict:
+    digest = hashlib.sha256(img_bytes).hexdigest()
+    safe_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    in_dir = _local_root() / "input"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    filepath = in_dir / f"{digest[:16]}{safe_suffix}"
+    if not filepath.exists():
+        try:
+            with filepath.open("xb") as f:
+                f.write(img_bytes)
+        except FileExistsError:
+            pass
+    return {"index": index, "filename": filepath.name, "path": _local_relative_path(filepath), "sha256": digest}
+
+
+def _migrate_old_batch_layout(items: list[dict]) -> list[dict]:
+    """把旧版每批一个文件夹的本机历史迁移到 output/input 平铺布局。"""
+    changed = False
+    root = _local_root()
+    for batch in items:
+        if not isinstance(batch, dict):
+            continue
+        batch_id = str(batch.get("id", ""))
+        batch_dir = root / _safe_segment(batch_id, "batch")
+        if not batch_dir.exists():
+            continue
+
+        for img in batch.get("images") or []:
+            if not isinstance(img, dict) or img.get("path"):
+                continue
+            filename = Path(str(img.get("filename", ""))).name
+            old_path = batch_dir / filename
+            if not filename or not old_path.is_file():
+                continue
+            try:
+                new_path = _write_numbered_output(
+                    root / "output" / _batch_date_folder(str(batch.get("time", ""))),
+                    _output_prefix(str(batch.get("model", ""))),
+                    old_path.suffix or ".png",
+                    old_path.read_bytes(),
+                )
+                old_path.unlink(missing_ok=True)
+                img["filename"] = new_path.name
+                img["path"] = _local_relative_path(new_path)
+                changed = True
+            except Exception as exc:
+                log.warning("迁移旧本机历史输出图失败 batch=%s file=%s error=%s", batch_id, filename, exc)
+
+        for ref in batch.get("ref_images") or []:
+            if not isinstance(ref, dict) or ref.get("path"):
+                continue
+            filename = Path(str(ref.get("filename", ""))).name
+            old_path = batch_dir / filename
+            if not filename or not old_path.is_file():
+                continue
+            try:
+                saved = _save_local_input_image(
+                    int(ref.get("index", 0)),
+                    old_path.read_bytes(),
+                    old_path.suffix or ".png",
+                )
+                old_path.unlink(missing_ok=True)
+                ref.update(saved)
+                changed = True
+            except Exception as exc:
+                log.warning("迁移旧本机历史输入图失败 batch=%s file=%s error=%s", batch_id, filename, exc)
+
+        try:
+            batch_dir.rmdir()
+        except OSError:
+            pass
+
+    if changed:
+        _write_local_manifest(items)
+        log.info("已将旧本机历史图片迁移到 output/input 平铺目录")
+    return items
+
+
+def _local_path_for_manifest_item(batch_id: str, item: dict | str) -> Path | None:
+    if isinstance(item, dict):
+        rel_path = item.get("path")
+        if rel_path:
+            return _local_path_from_relative(str(rel_path))
+        filename = Path(str(item.get("filename", ""))).name
+    else:
+        filename = Path(str(item)).name
+    if not filename:
+        return None
+    return _local_root() / _safe_segment(batch_id, "batch") / filename
+
+
+def _ref_path_used(rel_path: str, items: list[dict]) -> bool:
+    for item in items:
+        for ref in item.get("ref_images") or []:
+            if isinstance(ref, dict) and ref.get("path") == rel_path:
+                return True
+    return False
+
+
+def _delete_local_batch_files(batch: dict, remaining_items: list[dict]) -> None:
+    batch_id = str(batch.get("id", ""))
+    for img in batch.get("images") or []:
+        try:
+            path = _local_path_for_manifest_item(batch_id, img)
+            if path:
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    for ref in batch.get("ref_images") or []:
+        if not isinstance(ref, dict) or not ref.get("path"):
+            continue
+        try:
+            if not _ref_path_used(str(ref.get("path")), remaining_items):
+                _local_path_from_relative(str(ref.get("path"))).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    shutil.rmtree(_local_root() / _safe_segment(batch_id, "batch"), ignore_errors=True)
 
 
 def _read_local_manifest() -> list[dict]:
@@ -101,7 +284,7 @@ def _read_local_manifest() -> list[dict]:
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
+        return _migrate_old_batch_layout(data) if isinstance(data, list) else []
     except Exception:
         return []
 
@@ -223,7 +406,6 @@ async def save_local_batch(request: Request):
     if not images and not ref_images:
         raise HTTPException(400, "缺少图片数据")
 
-    batch_dir = _local_batch_dir(batch_id)
     saved_images = []
     saved_refs = []
 
@@ -232,25 +414,22 @@ async def save_local_batch(request: Request):
         if not converted:
             continue
         img_bytes, suffix = converted
-        filename = _gen_filename(i, "out", suffix)
-        (batch_dir / filename).write_bytes(img_bytes)
-        saved_images.append({"index": i, "filename": filename})
+        saved_images.append(_save_local_output_image(i, img_bytes, suffix, model, batch_time))
 
     for i, img in enumerate(ref_images):
         converted = await _image_payload_to_bytes(img, api_key)
         if not converted:
             continue
         img_bytes, suffix = converted
-        filename = _gen_filename(i, "ref", suffix)
-        (batch_dir / filename).write_bytes(img_bytes)
-        saved_refs.append({"index": i, "filename": filename})
+        saved_refs.append(_save_local_input_image(i, img_bytes, suffix))
 
     if not saved_images and not saved_refs:
-        shutil.rmtree(batch_dir, ignore_errors=True)
         log.warning("本机历史保存失败：没有可保存的图片 batch=%s images=%s refs=%s", batch_id, len(images), len(ref_images))
         raise HTTPException(400, "没有可保存的图片")
 
-    items = [item for item in _read_local_manifest() if item.get("id") != batch_id]
+    existing_items = _read_local_manifest()
+    replaced_items = [item for item in existing_items if item.get("id") == batch_id]
+    items = [item for item in existing_items if item.get("id") != batch_id]
     items.insert(0, {
         "id": batch_id,
         "model": model,
@@ -265,10 +444,12 @@ async def save_local_batch(request: Request):
     max_batches = int(get("history.local_max_batches", 200))
     removed = items[max_batches:]
     items = items[:max_batches]
+    for old in replaced_items:
+        _delete_local_batch_files(old, items)
     for old in removed:
-        shutil.rmtree(_local_root() / _safe_segment(old.get("id", ""), "batch"), ignore_errors=True)
+        _delete_local_batch_files(old, items)
     _write_local_manifest(items)
-    log.info("本机历史保存成功 batch=%s outputs=%s refs=%s dir=%s", batch_id, len(saved_images), len(saved_refs), batch_dir)
+    log.info("本机历史保存成功 batch=%s outputs=%s refs=%s root=%s", batch_id, len(saved_images), len(saved_refs), _local_root())
     return {"success": True, "saved": len(saved_images), "saved_refs": len(saved_refs)}
 
 
@@ -306,6 +487,15 @@ async def get_local_history_image(batch_id: str, filename: str, request: Request
     return FileResponse(filepath)
 
 
+@router.get("/local/file/{path:path}")
+async def get_local_history_file(path: str, request: Request):
+    _require_local_history(request)
+    filepath = _local_path_from_relative(path)
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(404, "图片不存在")
+    return FileResponse(filepath)
+
+
 @router.delete("/local/image/{batch_id}/{image_index}")
 async def delete_local_history_image(batch_id: str, image_index: int, request: Request):
     _require_local_history(request)
@@ -316,10 +506,9 @@ async def delete_local_history_image(batch_id: str, image_index: int, request: R
 
     images = batch.get("images") or []
     if 0 <= image_index < len(images):
-        filename = Path(str(images[image_index].get("filename", ""))).name
-        if filename:
-            fp = _local_root() / _safe_segment(batch_id, "batch") / filename
-            fp.unlink(missing_ok=True)
+        path = _local_path_for_manifest_item(batch_id, images[image_index])
+        if path:
+            path.unlink(missing_ok=True)
         images.pop(image_index)
         for idx, img in enumerate(images):
             img["index"] = idx
@@ -331,8 +520,11 @@ async def delete_local_history_image(batch_id: str, image_index: int, request: R
 @router.delete("/local/batch/{batch_id}")
 async def delete_local_batch(batch_id: str, request: Request):
     _require_local_history(request)
-    items = [item for item in _read_local_manifest() if item.get("id") != batch_id]
-    shutil.rmtree(_local_root() / _safe_segment(batch_id, "batch"), ignore_errors=True)
+    old_items = _read_local_manifest()
+    batch = next((item for item in old_items if item.get("id") == batch_id), None)
+    items = [item for item in old_items if item.get("id") != batch_id]
+    if batch:
+        _delete_local_batch_files(batch, items)
     _write_local_manifest(items)
     return {"success": True}
 

@@ -2647,6 +2647,15 @@ function _localImageUrl(batchId, filename) {
     return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}`;
 }
 
+function _localFileUrl(path) {
+    return `/api/history/local/file/${String(path || '').split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function _localManifestImageUrl(batchId, item) {
+    if (item && item.path) return _localFileUrl(item.path);
+    return _localImageUrl(batchId, item?.filename || item || '');
+}
+
 let _lastHistoryLoadStats = null;
 
 async function _saveToLocalFiles(batch) {
@@ -2692,10 +2701,10 @@ async function _loadFromLocalFiles() {
             time: b.time,
             text: b.text,
             params: b.params || null,
-            refImages: (b.ref_images || []).map(img => _localImageUrl(b.id, img.filename)),
+            refImages: (b.ref_images || []).map(img => _localManifestImageUrl(b.id, img)),
             images: (b.images || []).map(img => ({
                 b64_json: '',
-                url: _localImageUrl(b.id, img.filename),
+                url: _localManifestImageUrl(b.id, img),
                 _saved: true,
                 _localFile: true,
             })),
