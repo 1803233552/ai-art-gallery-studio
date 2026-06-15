@@ -9,6 +9,7 @@
   "permissions": [
     "core:default",
     "allow-save-image-file",
-    "allow-native-image-edit"
+    "allow-native-image-edit",
+    "allow-open-registration-url"
   ]
 }

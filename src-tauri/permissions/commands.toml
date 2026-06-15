@@ -7,3 +7,8 @@ commands.allow = ["save_image_file"]
 identifier = "allow-native-image-edit"
 description = "Allows the desktop webview to call the native image edit HTTP bridge."
 commands.allow = ["native_image_edit"]
+
+[[permission]]
+identifier = "allow-open-registration-url"
+description = "Allows opening the fixed registration URL in the system browser."
+commands.allow = ["open_registration_url"]

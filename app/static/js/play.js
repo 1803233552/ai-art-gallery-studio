@@ -6,6 +6,8 @@
 // ============================================================
 // 错误码映射（通俗中文 + 操作建议）
 // ============================================================
+const REGISTER_URL = 'https://newapi.qianye.host/register?aff=uk7G';
+
 const ERROR_MAP = {
     // ---- 限流 / 账号池 ----
     no_available_account:   "😴 当前太多人在用，所有账号都在忙，请等 30 秒后重试",
@@ -2451,6 +2453,16 @@ function _getTauriInvoke() {
 
 function _blobToBase64(blob) {
     return new Promise((resolve, reject) => {
+
+function openRegisterUrl(event) {
+    if (event) event.preventDefault();
+    const invoke = _getTauriInvoke();
+    if (invoke) {
+        invoke('open_registration_url').catch(() => window.open(REGISTER_URL, '_blank', 'noopener,noreferrer'));
+        return;
+    }
+    window.open(REGISTER_URL, '_blank', 'noopener,noreferrer');
+}
         const reader = new FileReader();
         reader.onload = () => {
             const text = String(reader.result || '');
@@ -3578,11 +3590,12 @@ async function renderUserPanel() {
                 <span style="color:var(--text-mute);font-size:13px">API Key 模式</span>
                 <div style="display:flex;gap:6px">
                     <button class="btn" id="playLoginBtn" style="padding:4px 14px;font-size:13px">账号登录</button>
-                    <a class="btn" href="https://newapi.qianye.host/register?aff=uk7G" target="_blank" rel="noopener noreferrer" style="padding:4px 14px;font-size:13px;text-decoration:none">注册</a>
+                    <a class="btn btn-primary" id="playRegisterBtn" href="${REGISTER_URL}" target="_blank" rel="noopener noreferrer" style="padding:4px 14px;font-size:13px;text-decoration:none">免费注册</a>
                 </div>
             </div>
             <div class="auth-mode-hint">账号登录只用于历史/广场身份；生成仍使用下方供应商 API Key。</div>`;
         els.userInfo.querySelector('#playLoginBtn').addEventListener('click', showPlayLogin);
+        els.userInfo.querySelector('#playRegisterBtn').addEventListener('click', openRegisterUrl);
         return;
     }
 
@@ -3636,9 +3649,12 @@ function showPlayLogin() {
             </div>
             <p id="plErr" style="color:#ff3b30;font-size:13px;margin-top:8px" hidden></p>
         </div>
-        <div style="padding:12px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
-            <button class="btn" id="plCancelBtn">取消</button>
-            <button class="btn btn-primary" id="plLoginBtn">登录</button>
+        <div style="padding:12px 24px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;justify-content:space-between">
+            <a class="btn btn-primary" id="plRegisterBtn" href="${REGISTER_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">没有账号？立即注册</a>
+            <div style="display:flex;gap:8px">
+                <button class="btn" id="plCancelBtn">取消</button>
+                <button class="btn btn-primary" id="plLoginBtn">登录</button>
+            </div>
         </div>
     </div>`;
     document.body.appendChild(overlay);
@@ -3646,6 +3662,7 @@ function showPlayLogin() {
     const close = () => overlay.remove();
     overlay.querySelector('#plClose').onclick = close;
     overlay.querySelector('#plCancelBtn').onclick = close;
+    overlay.querySelector('#plRegisterBtn').addEventListener('click', openRegisterUrl);
     overlay.querySelector('#plPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
     async function doLogin() {

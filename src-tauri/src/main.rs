@@ -1,5 +1,8 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::collections::HashSet;
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -7,7 +10,6 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
-use std::error::Error;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -25,12 +27,15 @@ const BACKEND_PORT_END: u16 = 18149;
 const APP_DATA_DIR_NAME: &str = "AI Art Gallery Studio";
 const TAURI_IDENTIFIER: &str = "com.aiartgallery.studio";
 const BACKEND_PORT_FILE: &str = "backend-port.txt";
+const REGISTRATION_URL: &str = "https://newapi.qianye.host/register?aff=uk7G";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 struct BackendProcess(Mutex<Option<CommandChild>>);
 
 #[cfg(windows)]
 fn terminate_process_tree(pid: u32) {
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let pid_arg = pid.to_string();
     let _ = Command::new("taskkill")
         .args(["/PID", pid_arg.as_str(), "/T", "/F"])
@@ -255,6 +260,27 @@ fn format_error_chain(err: &(dyn Error + 'static)) -> String {
 }
 
 #[tauri::command]
+fn open_registration_url() -> Result<(), String> {
+    #[cfg(windows)]
+    let status = Command::new("cmd")
+        .args(["/C", "start", "", REGISTRATION_URL])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(REGISTRATION_URL).status();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = Command::new("xdg-open").arg(REGISTRATION_URL).status();
+
+    status
+        .map_err(|err| format!("打开注册网址失败：{err}"))?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "打开注册网址失败".to_string())
+}
+
+#[tauri::command]
 async fn native_image_edit(
     base_url: String,
     api_key: String,
@@ -264,8 +290,8 @@ async fn native_image_edit(
     options_json: String,
     ref_images: Vec<String>,
 ) -> Result<String, String> {
-    let options: serde_json::Value = serde_json::from_str(&options_json)
-        .map_err(|err| format!("生成参数解析失败：{err}"))?;
+    let options: serde_json::Value =
+        serde_json::from_str(&options_json).map_err(|err| format!("生成参数解析失败：{err}"))?;
 
     let mut form = reqwest::multipart::Form::new()
         .text("model", model)
@@ -340,15 +366,21 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(BackendProcess(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![save_image_file, native_image_edit])
+        .invoke_handler(tauri::generate_handler![
+            save_image_file,
+            native_image_edit,
+            open_registration_url
+        ])
         .setup(|app| {
             let backend_port = find_free_port();
             persist_backend_port(backend_port);
             let backend_port_arg = backend_port.to_string();
-            let sidecar = app
-                .shell()
-                .sidecar("ai-studio-backend")?
-                .args(["--host", BACKEND_HOST, "--port", &backend_port_arg]);
+            let sidecar = app.shell().sidecar("ai-studio-backend")?.args([
+                "--host",
+                BACKEND_HOST,
+                "--port",
+                &backend_port_arg,
+            ]);
             let (mut rx, child) = sidecar.spawn()?;
 
             *app.state::<BackendProcess>().0.lock().unwrap() = Some(child);

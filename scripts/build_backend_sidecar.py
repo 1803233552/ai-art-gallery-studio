@@ -80,6 +80,8 @@ def main() -> None:
         "--exclude-module", "PIL.AvifImagePlugin",
         str(ROOT / "app" / "desktop_backend.py"),
     ]
+    if sys.platform == "win32":
+        pyinstaller_cmd.insert(pyinstaller_cmd.index("--onefile") + 1, "--noconsole")
     run(pyinstaller_cmd)
 
     built_binary = dist_dir / f"{SIDECAR_NAME}{extension}"
