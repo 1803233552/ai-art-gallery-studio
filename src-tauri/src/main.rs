@@ -268,8 +268,18 @@ fn format_error_chain(err: &(dyn Error + 'static)) -> String {
 #[cfg(windows)]
 fn open_url_with_system_browser(url: &str) -> Result<(), String> {
     let attempts = [
-        ("explorer.exe", vec![url]),
         ("cmd", vec!["/C", "start", "", url]),
+        (
+            "powershell.exe",
+            vec![
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Start-Process",
+                url,
+            ],
+        ),
         ("rundll32.exe", vec!["url.dll,FileProtocolHandler", url]),
     ];
 
