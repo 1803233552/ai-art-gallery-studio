@@ -265,25 +265,50 @@ fn format_error_chain(err: &(dyn Error + 'static)) -> String {
     parts.join("; caused by: ")
 }
 
+#[cfg(windows)]
+fn open_url_with_system_browser(url: &str) -> Result<(), String> {
+    let attempts = [
+        ("explorer.exe", vec![url]),
+        ("cmd", vec!["/C", "start", "", url]),
+        ("rundll32.exe", vec!["url.dll,FileProtocolHandler", url]),
+    ];
+
+    let mut errors = Vec::new();
+    for (program, args) in attempts {
+        match Command::new(program)
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(err) => errors.push(format!("{program}: {err}")),
+        }
+    }
+
+    Err(format!("打开注册网址失败：{}", errors.join("; ")))
+}
+
+#[cfg(target_os = "macos")]
+fn open_url_with_system_browser(url: &str) -> Result<(), String> {
+    Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("打开注册网址失败：{err}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_url_with_system_browser(url: &str) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("打开注册网址失败：{err}"))
+}
+
 #[tauri::command]
 fn open_registration_url() -> Result<(), String> {
-    #[cfg(windows)]
-    let status = Command::new("explorer.exe")
-        .arg(REGISTRATION_URL)
-        .creation_flags(CREATE_NO_WINDOW)
-        .status();
-
-    #[cfg(target_os = "macos")]
-    let status = Command::new("open").arg(REGISTRATION_URL).status();
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let status = Command::new("xdg-open").arg(REGISTRATION_URL).status();
-
-    status
-        .map_err(|err| format!("打开注册网址失败：{err}"))?
-        .success()
-        .then_some(())
-        .ok_or_else(|| "打开注册网址失败".to_string())
+    open_url_with_system_browser(REGISTRATION_URL)
 }
 
 #[tauri::command]
