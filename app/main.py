@@ -1,6 +1,8 @@
 """FastAPI 入口"""
 import logging
+import os
 import sys
+import time
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -16,6 +18,88 @@ from app.routers import pages, auth, gallery, api_proxy, history, balance
 
 _logging_done = False
 
+
+class SizeAndTimeRotatingFileHandler(TimedRotatingFileHandler):
+    """按天 + 按大小轮换，避免单日高频日志把 app.log 写到无限大。"""
+
+    def __init__(self, *args, maxBytes: int = 0, maxFiles: int = 0, keepDays: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.maxBytes = max(0, int(maxBytes or 0))
+        self.maxFiles = max(0, int(maxFiles or 0))
+        self.keepDays = max(0, int(keepDays or 0))
+        self._size_rollover = False
+
+    def shouldRollover(self, record):
+        if super().shouldRollover(record):
+            self._size_rollover = False
+            return 1
+
+        if self.maxBytes > 0:
+            if self.stream is None:
+                self.stream = self._open()
+            msg = f"{self.format(record)}\n"
+            try:
+                msg_len = len(msg.encode(self.encoding or "utf-8", "replace"))
+            except LookupError:
+                msg_len = len(msg)
+            if self.stream.tell() + msg_len >= self.maxBytes:
+                self._size_rollover = True
+                return 1
+
+        self._size_rollover = False
+        return 0
+
+    def doRollover(self):
+        if not self._size_rollover:
+            super().doRollover()
+            self._cleanup_backups()
+            return
+
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        if os.path.exists(self.baseFilename):
+            if self.backupCount > 0:
+                self.rotate(self.baseFilename, self._size_rollover_filename())
+            else:
+                open(self.baseFilename, "w", encoding=self.encoding or "utf-8").close()
+
+        if not self.delay:
+            self.stream = self._open()
+        self._size_rollover = False
+        self._cleanup_backups()
+
+    def _size_rollover_filename(self) -> str:
+        base = f"{self.baseFilename}.{time.strftime('%Y-%m-%d_%H-%M-%S')}.log"
+        candidate = base
+        seq = 1
+        while os.path.exists(candidate):
+            candidate = f"{base}.{seq}"
+            seq += 1
+        return candidate
+
+    def _cleanup_backups(self) -> None:
+        base = Path(self.baseFilename)
+        backups = [p for p in base.parent.glob(f"{base.name}.*") if p.is_file()]
+        if self.keepDays > 0:
+            cutoff = time.time() - self.keepDays * 86400
+            for path in list(backups):
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        if self.maxFiles > 0:
+            backups = [p for p in base.parent.glob(f"{base.name}.*") if p.is_file()]
+            backups.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+            for path in backups[self.maxFiles:]:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
 def setup_logging():
     """按天轮换日志，自动清理过期文件"""
     global _logging_done
@@ -27,6 +111,8 @@ def setup_logging():
     log_dir.mkdir(parents=True, exist_ok=True)
     level_name = get("logging.level", "INFO").upper()
     keep_days = int(get("logging.keep_days", 30))
+    max_file_mb = max(1, int(get("logging.max_file_mb", 10)))
+    max_files = max(1, int(get("logging.max_files", max(keep_days, 1))))
     level = getattr(logging, level_name, logging.INFO)
 
     fmt = logging.Formatter(
@@ -34,12 +120,15 @@ def setup_logging():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # 按天轮换的文件 handler
-    file_handler = TimedRotatingFileHandler(
+    # 按天 + 按大小轮换的文件 handler
+    file_handler = SizeAndTimeRotatingFileHandler(
         filename=str(log_dir / "app.log"),
         when="midnight",
         interval=1,
-        backupCount=keep_days,
+        backupCount=max_files,
+        maxBytes=max_file_mb * 1024 * 1024,
+        maxFiles=max_files,
+        keepDays=keep_days,
         encoding="utf-8",
     )
     file_handler.suffix = "%Y-%m-%d.log"
@@ -66,7 +155,10 @@ def setup_logging():
         uv_logger.addHandler(console_handler)
         uv_logger.propagate = False
 
-    logging.info("日志初始化完成 → %s (保留 %d 天, 级别 %s)", log_dir, keep_days, level_name)
+    logging.info(
+        "日志初始化完成 → %s (保留 %d 天, 单文件 %d MB, 最多 %d 个备份, 级别 %s)",
+        log_dir, keep_days, max_file_mb, max_files, level_name,
+    )
 
 
 def create_app() -> FastAPI:

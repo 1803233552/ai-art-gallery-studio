@@ -94,6 +94,9 @@ const state = {
     progress: { done: 0, total: 0, elapsed: 0 },
 };
 
+const LOG_MAX_ENTRIES = 300;
+const QUEUE_MAX_PENDING = 20;
+
 // ============================================================
 // DOM refs
 // ============================================================
@@ -624,6 +627,13 @@ function addLog(text, type = '') {
     els.logBody.appendChild(entry);
     els.logBody.scrollTop = els.logBody.scrollHeight;
     state.logs.push({ ts: Date.now(), text, type });
+    if (state.logs.length > LOG_MAX_ENTRIES) {
+        state.logs.splice(0, state.logs.length - LOG_MAX_ENTRIES);
+    }
+    const lines = els.logBody.querySelectorAll('.log-ln');
+    for (let i = 0; i < lines.length - LOG_MAX_ENTRIES; i++) {
+        lines[i].remove();
+    }
 }
 
 function ensureQueuePanel() {
@@ -1182,7 +1192,9 @@ const HISTORY_MAX_BATCHES = 50;
 function _compressImage(file) {
     return new Promise((resolve, reject) => {
         const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
         img.onload = () => {
+            URL.revokeObjectURL(objectUrl);
             let { width, height } = img;
             // 缩放到最大边 MAX_REF_PX
             if (width > MAX_REF_PX || height > MAX_REF_PX) {
@@ -1200,8 +1212,11 @@ function _compressImage(file) {
             const sizeKB = Math.round(dataUrl.length * 3 / 4 / 1024);
             resolve({ dataUrl, sizeKB, width, height });
         };
-        img.onerror = () => reject(new Error('图片加载失败'));
-        img.src = URL.createObjectURL(file);
+        img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('图片加载失败'));
+        };
+        img.src = objectUrl;
     });
 }
 
@@ -1302,6 +1317,11 @@ function createGenerationTask() {
 }
 
 function enqueueGenerationTask() {
+    const pendingCount = state.queue.filter(t => t.status === 'queued').length;
+    if (pendingCount >= QUEUE_MAX_PENDING) {
+        addLog(`生成队列最多保留 ${QUEUE_MAX_PENDING} 个等待任务，请先等待或取消部分任务`, 'warn');
+        return;
+    }
     const task = createGenerationTask();
     if (!task) return;
     state.prompt = task.prompt;
@@ -3247,7 +3267,7 @@ async function _saveToLocal() {
             if (batch.images) {
                 for (let i = 0; i < batch.images.length; i++) {
                     const img = batch.images[i];
-                    if (img._server) continue; // 服务器图片不存本地
+                    if (img._server || img._localFile) continue; // 服务器/本机文件图片不再重复存大图到 IndexedDB
                     const key = _imgKey(batch.id, i);
                     const raw = img.b64_json || img.url || '';
                     if (raw && !img._saved) {
@@ -3273,7 +3293,7 @@ async function _saveToLocal() {
                     if (batch.images) {
                         for (let i = 0; i < batch.images.length; i++) {
                             const img = batch.images[i];
-                            if (img._server) continue;
+                            if (img._server || img._localFile) continue;
                             const raw = img.b64_json || img.url || '';
                             if (raw) fallback[_imgKey(batch.id, i)] = raw;
                         }
@@ -3382,12 +3402,7 @@ async function _loadFromLocal() {
 
 // ---- 统一入口 ----
 async function saveHistory() {
-    // 始终保存本地一份
-    await _saveToLocal();
     const newest = state.history[0];
-    if (newest) {
-        await _saveToLocalFiles(newest);
-    }
     // 服务器存储开启时，也同步到服务器
     if (_serverHistoryEnabled()) {
         if (newest && !newest._serverSaved) {
@@ -3397,6 +3412,16 @@ async function saveHistory() {
             renderUserPanel();
         }
     }
+    if (newest && await _saveToLocalFiles(newest)) {
+        await deleteHistoryBatchLocalData(newest);
+        const fileBatches = await _loadFromLocalFiles();
+        if (_replaceHistoryBatchesById(fileBatches)) {
+            const replacement = state.history.find(b => b.id === newest.id);
+            if (replacement) replacement._serverSaved = newest._serverSaved;
+        }
+    }
+    // 始终保存本地一份。桌面/本机场景会保存文件 URL 元数据，不再重复保存大图 base64。
+    await _saveToLocal();
 }
 
 async function loadHistory() {

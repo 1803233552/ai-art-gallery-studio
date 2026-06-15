@@ -1,9 +1,11 @@
 """数据库管理 - 支持 SQLite / MySQL"""
 import aiosqlite
+import logging
 from pathlib import Path
 from app.config import get, resolve_path
 
 _db_path: str = ""
+log = logging.getLogger(__name__)
 
 def _db_type() -> str:
     return get("database.type", "sqlite").lower()
@@ -25,8 +27,26 @@ async def _get_sqlite() -> aiosqlite.Connection:
     db = await aiosqlite.connect(get_db_path())
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
+    journal_limit_mb = max(1, int(get("database.sqlite_journal_limit_mb", 32)))
+    autocheckpoint_pages = max(100, int(get("database.sqlite_wal_autocheckpoint_pages", 1000)))
+    await db.execute(f"PRAGMA journal_size_limit={journal_limit_mb * 1024 * 1024}")
+    await db.execute(f"PRAGMA wal_autocheckpoint={autocheckpoint_pages}")
     await db.execute("PRAGMA foreign_keys=ON")
     return db
+
+
+async def checkpoint_sqlite(truncate: bool = False) -> None:
+    """周期性 checkpoint SQLite WAL，避免 .db-wal 长期占用磁盘。"""
+    if _db_type() != "sqlite":
+        return
+    db = await _get_sqlite()
+    try:
+        mode = "TRUNCATE" if truncate else "PASSIVE"
+        await db.execute(f"PRAGMA wal_checkpoint({mode})")
+    except Exception as exc:
+        log.debug("SQLite WAL checkpoint 跳过: %s", exc)
+    finally:
+        await db.close()
 
 async def _get_mysql():
     """获取 MySQL 连接"""
@@ -345,5 +365,10 @@ async def init_db():
             except Exception:
                 pass
         await db.commit()
+        if _db_type() == "sqlite":
+            try:
+                await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
     finally:
         await db.close()

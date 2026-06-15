@@ -22,6 +22,8 @@ logging:
   dir: "./logs"
   level: "INFO"
   keep_days: 7
+  max_file_mb: 10
+  max_files: 14
   cleanup_interval_minutes: 60
 
 api_nodes:
@@ -92,5 +94,7 @@ announcements:
 database:
   type: "sqlite"
   path: "./data/ai-studio.db"
+  sqlite_journal_limit_mb: 32
+  sqlite_wal_autocheckpoint_pages: 1000
 
 secret_key: ""

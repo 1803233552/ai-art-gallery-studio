@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
 import aiohttp
 from app.config import get, resolve_path
-from app.database import get_db
+from app.database import get_db, checkpoint_sqlite
 from app.routers.auth import verify_user_token
 
 router = APIRouter(prefix="/api/history", tags=["history"])
@@ -869,5 +869,6 @@ async def cleanup_loop():
             n = await cleanup_expired()
             if n:
                 log.info("已清理 %d 条过期绘图历史", n)
+            await checkpoint_sqlite(truncate=bool(n))
         except Exception as e:
             log.warning("历史清理任务异常: %s", e)

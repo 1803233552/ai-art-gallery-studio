@@ -41,6 +41,12 @@ logging:
   # 日志保留天数，超过后自动删除旧日志文件
   keep_days: 30
 
+  # 单个日志文件最大体积，超出后会在当天继续切分，避免单日日志无限变大
+  max_file_mb: 10
+
+  # 最多保留多少个历史日志文件（同时还会受 keep_days 限制）
+  max_files: 30
+
   # 后台清理任务的遍历间隔（单位：分钟），默认 60 分钟
   # 每隔该时间检查一次是否有过期的云缓存需要删除
   cleanup_interval_minutes: 60
@@ -185,6 +191,10 @@ announcements:
 database:
   # 数据库类型：sqlite（轻量，无需安装） 或 mysql
   type: "mysql"
+
+  # SQLite WAL 日志维护：限制 -wal 文件长期增长（type: sqlite 时生效）
+  sqlite_journal_limit_mb: 32
+  sqlite_wal_autocheckpoint_pages: 1000
 
   # ---- SQLite 配置（type: sqlite 时使用）----
   # 数据库文件路径，规则同 storage_path：
