@@ -891,6 +891,13 @@ html.dark .pg {
     gap: 10px;
 }
 
+.auth-mode-hint {
+    margin-top: 8px;
+    color: var(--faint);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 .workspace-item {
     min-height: 44px;
     width: 100%;

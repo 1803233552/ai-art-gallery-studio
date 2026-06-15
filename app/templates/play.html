@@ -20,7 +20,7 @@
             </div>
 
             <section class="side-section" id="userPnl">
-                <div class="side-section-head"><span>用户</span></div>
+                <div class="side-section-head"><span>登录模式</span></div>
                 <div id="userInfo" class="user-info"></div>
             </section>
 
@@ -31,9 +31,7 @@
                 </div>
                 <div class="field">
                     <label for="nodeSelect">模型供应商</label>
-                    <select id="nodeSelect" class="pg-select">
-                        <option value="">选择供应商</option>
-                    </select>
+                    <select id="nodeSelect" class="pg-select"></select>
                 </div>
                 <div class="field provider-line-field" id="qianyeLineField" hidden>
                     <label for="qianyeLineSelect">专属线路</label>
@@ -45,13 +43,13 @@
                     <input type="url" id="customBaseInput" class="pg-input" placeholder="https://api.example.com 或 127.0.0.1:3000" autocomplete="off">
                 </div>
                 <div class="field">
-                    <label for="apiKeyInput">API Key</label>
+                    <label for="apiKeyInput">当前供应商 API Key</label>
                     <input type="password" id="apiKeyInput" class="pg-input" placeholder="sk-..." autocomplete="off">
                 </div>
                 <button class="btn btn-primary compact" id="connectBtn" type="button">连接</button>
             </section>
 
-            <section class="side-section balance-section">
+            <section class="side-section balance-section" hidden>
                 <div class="side-section-head">
                     <span>余额</span>
                     <button class="balance-link" id="balanceBindBtn" type="button">绑定</button>

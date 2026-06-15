@@ -323,7 +323,7 @@ function getActiveBaseUrl(ctx = null) {
     if (isCustomNodeSelected()) {
         return normalizeBaseUrl(els.customBaseInput?.value || localStorage.getItem('ai_custom_base') || state.baseUrl || '');
     }
-    return normalizeBaseUrl(state.baseUrl || '');
+    return '';
 }
 
 function isCustomNodeSelected() {
@@ -777,6 +777,11 @@ function balanceBaseUrl() {
     return localStorage.getItem('ai_balance_base') || getActiveBaseUrl();
 }
 
+function isBalancePanelEnabled() {
+    const section = els.balanceInfo?.closest?.('.balance-section');
+    return !!section && section.hidden !== true;
+}
+
 function formatUsd(value) {
     const n = Number(value || 0);
     return '$' + n.toFixed(4);
@@ -840,6 +845,7 @@ async function queryBalance() {
 }
 
 async function refreshBalance() {
+    if (!isBalancePanelEnabled()) return;
     try {
         await queryBalance();
         addLog('余额已刷新', 'success');
@@ -955,7 +961,7 @@ async function connectApi() {
 
         localStorage.setItem('ai_key', apiKey);
         saveActiveNode(baseUrl);
-        if (getBalanceToken()) refreshBalance();
+        if (getBalanceToken() && isBalancePanelEnabled()) refreshBalance();
 
         renderModelChips();
         updateGenerateButton();
@@ -3569,9 +3575,10 @@ async function renderUserPanel() {
         // 未登录
         els.userInfo.innerHTML = `
             <div class="u-login-row">
-                <span style="color:var(--text-mute);font-size:13px">未登录</span>
-                <button class="btn" id="playLoginBtn" style="padding:4px 14px;font-size:13px">登录</button>
-            </div>`;
+                <span style="color:var(--text-mute);font-size:13px">API Key 模式</span>
+                <button class="btn" id="playLoginBtn" style="padding:4px 14px;font-size:13px">账号登录</button>
+            </div>
+            <div class="auth-mode-hint">账号登录只用于历史/广场身份；生成仍使用下方供应商 API Key。</div>`;
         els.userInfo.querySelector('#playLoginBtn').addEventListener('click', showPlayLogin);
         return;
     }
@@ -3595,9 +3602,10 @@ async function renderUserPanel() {
 
     els.userInfo.innerHTML = `
         <div class="u-welcome">
-            <span>👋 ${escHtml(username)}</span>
+            <span>账号登录：${escHtml(username)}</span>
             <button class="u-logout" id="playLogoutBtn" title="退出登录">退出</button>
         </div>
+        <div class="auth-mode-hint">当前已登录站内账号；生成请求仍走所选供应商和 API Key。</div>
         ${usageHtml}`;
     els.userInfo.querySelector('#playLogoutBtn').addEventListener('click', () => {
         localStorage.removeItem('token');
@@ -3672,7 +3680,7 @@ function showPlayLogin() {
 // ============================================================
 async function init() {
     // 渲染模型供应商：浅夜の梦中转站 / 本机 NewAPI / 自定义 Base URL
-    els.nodeSelect.innerHTML = '<option value="">选择供应商</option>';
+    els.nodeSelect.innerHTML = '';
     [
         [PROVIDER_QIANYE, '浅夜の梦中转站'],
         [PROVIDER_LOCAL_NEWAPI, '本机 NewAPI'],
@@ -3738,9 +3746,9 @@ async function init() {
     bindEvents();
     renderUserPanel();
     await loadHistory();
-    if (getBalanceToken()) {
+    if (getBalanceToken() && isBalancePanelEnabled()) {
         refreshBalance();
-    } else {
+    } else if (isBalancePanelEnabled()) {
         renderBalanceEmpty();
     }
     addLog('工作台已就绪');
