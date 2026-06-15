@@ -2451,18 +2451,25 @@ function _getTauriInvoke() {
     return null;
 }
 
-function _blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-
-function openRegisterUrl(event) {
+async function openRegisterUrl(event) {
     if (event) event.preventDefault();
     const invoke = _getTauriInvoke();
     if (invoke) {
-        invoke('open_registration_url').catch(() => window.open(REGISTER_URL, '_blank', 'noopener,noreferrer'));
-        return;
+        try {
+            await invoke('open_registration_url');
+            addLog('已在系统浏览器打开注册页面', 'success');
+            return;
+        } catch (err) {
+            addLog(`打开注册页面失败：${err.message || err}`, 'err');
+            return;
+        }
     }
-    window.open(REGISTER_URL, '_blank', 'noopener,noreferrer');
+    const opened = window.open(REGISTER_URL, '_blank', 'noopener,noreferrer');
+    if (!opened) addLog(`浏览器拦截了注册页面，请手动打开：${REGISTER_URL}`, 'warn');
 }
+
+function _blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
             const text = String(reader.result || '');

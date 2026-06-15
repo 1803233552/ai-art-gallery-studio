@@ -262,8 +262,8 @@ fn format_error_chain(err: &(dyn Error + 'static)) -> String {
 #[tauri::command]
 fn open_registration_url() -> Result<(), String> {
     #[cfg(windows)]
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", REGISTRATION_URL])
+    let status = Command::new("explorer.exe")
+        .arg(REGISTRATION_URL)
         .creation_flags(CREATE_NO_WINDOW)
         .status();
 
