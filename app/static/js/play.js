@@ -3576,7 +3576,10 @@ async function renderUserPanel() {
         els.userInfo.innerHTML = `
             <div class="u-login-row">
                 <span style="color:var(--text-mute);font-size:13px">API Key 模式</span>
-                <button class="btn" id="playLoginBtn" style="padding:4px 14px;font-size:13px">账号登录</button>
+                <div style="display:flex;gap:6px">
+                    <button class="btn" id="playLoginBtn" style="padding:4px 14px;font-size:13px">账号登录</button>
+                    <a class="btn" href="https://newapi.qianye.host/register?aff=uk7G" target="_blank" rel="noopener noreferrer" style="padding:4px 14px;font-size:13px;text-decoration:none">注册</a>
+                </div>
             </div>
             <div class="auth-mode-hint">账号登录只用于历史/广场身份；生成仍使用下方供应商 API Key。</div>`;
         els.userInfo.querySelector('#playLoginBtn').addEventListener('click', showPlayLogin);
