@@ -101,6 +101,9 @@ const $$ = (s) => document.querySelectorAll(s);
 const els = {
     playground:       $('.pg'),
     nodeSelect:        $('#nodeSelect'),
+    qianyeLineField:   $('#qianyeLineField'),
+    qianyeLineSelect:  $('#qianyeLineSelect'),
+    qianyeLineHint:    $('#qianyeLineHint'),
     customBaseField:   $('#customBaseField'),
     customBaseInput:   $('#customBaseInput'),
     apiKeyInput:       $('#apiKeyInput'),
@@ -221,8 +224,39 @@ const SIZE_MAP = {
     },
 };
 
-const REQUIRED_API_NODES = {};
 const CUSTOM_NODE_VALUE = '__custom_base_url__';
+const PROVIDER_QIANYE = '__provider_qianye__';
+const PROVIDER_LOCAL_NEWAPI = '__provider_local_newapi__';
+
+const QIANYE_LINES = [
+    {
+        id: 'cf',
+        label: 'CF国际线路',
+        url: 'https://newapi.qianqianye.com',
+        aliases: ['https://newapi-cf.qianqianye.com'],
+        hint: '大宽带，有魔法推荐，不推荐直连，海外机器推荐。这个 API 使用生图模型的时候容易出现 524。',
+    },
+    {
+        id: 'hk',
+        label: '香港优化线路',
+        url: 'https://newapi-hk.qianye.host',
+        hint: '优化线路很贵，有魔法的请选择国际线路，把机会留给需要的人~感谢支持。选择优化线路则不要开启魔法，避免减速带效果~',
+    },
+    {
+        id: 'us',
+        label: '美国优化线路',
+        url: 'https://newapi-us-la-1.qianye.host',
+        hint: '优化线路很贵，有魔法的请选择国际线路，把机会留给需要的人~感谢支持。选择优化线路则不要开启魔法，避免减速带效果~',
+    },
+    {
+        id: 'jp',
+        label: '日本优化线路',
+        url: 'https://newapi-jp.qianye.host',
+        hint: '优化线路很贵，有魔法的请选择国际线路，把机会留给需要的人~感谢支持。选择优化线路则不要开启魔法，避免减速带效果~',
+    },
+];
+const DEFAULT_QIANYE_LINE_ID = 'cf';
+const LOCAL_NEWAPI_URL = '127.0.0.1:3000';
 
 // ============================================================
 // 工具函数
@@ -253,27 +287,71 @@ function normalizeBaseUrl(url) {
     return `http://${value}`;
 }
 
+function qianyeLineById(id) {
+    return QIANYE_LINES.find(line => line.id === id) || QIANYE_LINES.find(line => line.id === DEFAULT_QIANYE_LINE_ID) || QIANYE_LINES[0];
+}
+
+function qianyeLineByUrl(url) {
+    const normalized = normalizeBaseUrl(url);
+    return QIANYE_LINES.find(line => {
+        if (normalizeBaseUrl(line.url) === normalized) return true;
+        return (line.aliases || []).some(alias => normalizeBaseUrl(alias) === normalized);
+    }) || null;
+}
+
+function currentProvider() {
+    return els.nodeSelect?.value || '';
+}
+
+function isQianyeProviderSelected() {
+    return currentProvider() === PROVIDER_QIANYE;
+}
+
+function isLocalNewApiSelected() {
+    return currentProvider() === PROVIDER_LOCAL_NEWAPI;
+}
+
 function getActiveBaseUrl(ctx = null) {
     if (ctx?.baseUrl) return normalizeBaseUrl(ctx.baseUrl);
-    const selected = els.nodeSelect?.value?.trim() || '';
-    if (selected === CUSTOM_NODE_VALUE) {
+    if (isQianyeProviderSelected()) {
+        const line = qianyeLineById(els.qianyeLineSelect?.value || localStorage.getItem('ai_qianye_line') || DEFAULT_QIANYE_LINE_ID);
+        return normalizeBaseUrl(line?.url || '');
+    }
+    if (isLocalNewApiSelected()) {
+        return normalizeBaseUrl(LOCAL_NEWAPI_URL);
+    }
+    if (isCustomNodeSelected()) {
         return normalizeBaseUrl(els.customBaseInput?.value || localStorage.getItem('ai_custom_base') || state.baseUrl || '');
     }
-    return normalizeBaseUrl(selected || state.baseUrl || '');
+    return normalizeBaseUrl(state.baseUrl || '');
 }
 
 function isCustomNodeSelected() {
     return els.nodeSelect?.value === CUSTOM_NODE_VALUE;
 }
 
-function updateCustomBaseVisibility() {
+function updateProviderFields() {
+    if (els.qianyeLineField) els.qianyeLineField.hidden = !isQianyeProviderSelected();
     if (!els.customBaseField) return;
     els.customBaseField.hidden = !isCustomNodeSelected();
+    if (els.qianyeLineHint && isQianyeProviderSelected()) {
+        const line = qianyeLineById(els.qianyeLineSelect?.value || DEFAULT_QIANYE_LINE_ID);
+        els.qianyeLineHint.textContent = line ? `${line.url}｜${line.hint}（有的客户端需要手动加 /v1，请注意）` : '';
+    }
+}
+
+function updateCustomBaseVisibility() {
+    updateProviderFields();
 }
 
 function saveActiveNode(baseUrl) {
     const normalized = normalizeBaseUrl(baseUrl);
-    if (isCustomNodeSelected()) {
+    if (isQianyeProviderSelected()) {
+        localStorage.setItem('ai_node', PROVIDER_QIANYE);
+        localStorage.setItem('ai_qianye_line', els.qianyeLineSelect?.value || DEFAULT_QIANYE_LINE_ID);
+    } else if (isLocalNewApiSelected()) {
+        localStorage.setItem('ai_node', PROVIDER_LOCAL_NEWAPI);
+    } else if (isCustomNodeSelected()) {
         localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
         localStorage.setItem('ai_custom_base', normalized);
     } else {
@@ -851,7 +929,7 @@ async function connectApi() {
     const baseUrl = getActiveBaseUrl();
     const apiKey = els.apiKeyInput.value.trim();
 
-    if (!baseUrl) { addLog('请先选择节点', 'warn'); return; }
+    if (!baseUrl) { addLog('请先选择模型供应商', 'warn'); return; }
     if (!apiKey) { addLog('请输入 API Key', 'warn'); return; }
 
     state.baseUrl = baseUrl;
@@ -1051,14 +1129,17 @@ async function applyGenerationParams(batch) {
 
     if (params.baseUrl && els.nodeSelect) {
         const normalized = normalizeBaseUrl(params.baseUrl);
-        const matched = Array.from(els.nodeSelect.options).find(opt => normalizeBaseUrl(opt.value) === normalized);
-        if (matched) {
-            els.nodeSelect.value = matched.value;
+        const qianyeLine = qianyeLineByUrl(normalized);
+        if (qianyeLine) {
+            els.nodeSelect.value = PROVIDER_QIANYE;
+            if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLine.id;
+        } else if (normalized === normalizeBaseUrl(LOCAL_NEWAPI_URL)) {
+            els.nodeSelect.value = PROVIDER_LOCAL_NEWAPI;
         } else if (els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = normalized;
         }
-        updateCustomBaseVisibility();
+        updateProviderFields();
         state.baseUrl = normalized;
         saveActiveNode(normalized);
     }
@@ -3382,10 +3463,17 @@ function bindEvents() {
     els.apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') connectApi(); });
     els.nodeSelect.addEventListener('change', () => {
         const next = getActiveBaseUrl();
-        updateCustomBaseVisibility();
+        updateProviderFields();
         state.baseUrl = next;
         saveActiveNode(next);
-        if (state.isConnected) addLog(`已切换 API 线路：${next}，后续请求将使用该线路`, 'success');
+        if (state.isConnected) addLog(`已切换模型供应商：${next}，后续请求将使用该地址`, 'success');
+    });
+    els.qianyeLineSelect?.addEventListener('change', () => {
+        const next = getActiveBaseUrl();
+        updateProviderFields();
+        state.baseUrl = next;
+        saveActiveNode(next);
+        if (state.isConnected) addLog(`已切换浅夜の梦专属线路：${next}，后续请求将使用该线路`, 'success');
     });
     els.customBaseInput?.addEventListener('input', () => {
         if (!isCustomNodeSelected()) return;
@@ -3583,51 +3671,65 @@ function showPlayLogin() {
 // 初始化
 // ============================================================
 async function init() {
-    // 从 data 属性读取节点列表并渲染 select options
-    try {
-        const nodesJson = els.playground.dataset.apiNodes;
-        const nodes = { ...REQUIRED_API_NODES };
-        if (nodesJson) {
-            Object.assign(nodes, JSON.parse(nodesJson));
-        }
-        const seen = new Set();
-        for (const [label, url] of Object.entries(nodes)) {
-            if (!url || seen.has(url)) continue;
-            seen.add(url);
+    // 渲染模型供应商：浅夜の梦中转站 / 本机 NewAPI / 自定义 Base URL
+    els.nodeSelect.innerHTML = '<option value="">选择供应商</option>';
+    [
+        [PROVIDER_QIANYE, '浅夜の梦中转站'],
+        [PROVIDER_LOCAL_NEWAPI, '本机 NewAPI'],
+        [CUSTOM_NODE_VALUE, '自定义 Base URL'],
+    ].forEach(([value, label]) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        els.nodeSelect.appendChild(opt);
+    });
+    if (els.qianyeLineSelect) {
+        els.qianyeLineSelect.innerHTML = '';
+        QIANYE_LINES.forEach(line => {
             const opt = document.createElement('option');
-            opt.value = url;
-            opt.textContent = label;
-            els.nodeSelect.appendChild(opt);
-        }
-        const customOpt = document.createElement('option');
-        customOpt.value = CUSTOM_NODE_VALUE;
-        customOpt.textContent = '自定义 Base URL';
-        els.nodeSelect.appendChild(customOpt);
-    } catch (e) { console.warn('Failed to parse api nodes:', e); }
+            opt.value = line.id;
+            opt.textContent = `${line.label} · ${line.url}`;
+            els.qianyeLineSelect.appendChild(opt);
+        });
+    }
 
-    // 恢复 API Key / 节点
+    // 恢复 API Key / 模型供应商
     const savedKey = localStorage.getItem('ai_key');
     const savedNode = localStorage.getItem('ai_node');
     const savedCustomBase = localStorage.getItem('ai_custom_base') || '';
+    const savedQianyeLine = localStorage.getItem('ai_qianye_line') || DEFAULT_QIANYE_LINE_ID;
     if (savedKey) {
         els.apiKeyInput.value = savedKey;
         state.apiKey = savedKey;
     }
     if (savedCustomBase && els.customBaseInput) els.customBaseInput.value = savedCustomBase;
-    if (savedNode === CUSTOM_NODE_VALUE) {
+    if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLineById(savedQianyeLine)?.id || DEFAULT_QIANYE_LINE_ID;
+    if (savedNode === PROVIDER_QIANYE) {
+        els.nodeSelect.value = PROVIDER_QIANYE;
+    } else if (savedNode === PROVIDER_LOCAL_NEWAPI) {
+        els.nodeSelect.value = PROVIDER_LOCAL_NEWAPI;
+    } else if (savedNode === CUSTOM_NODE_VALUE) {
         els.nodeSelect.value = CUSTOM_NODE_VALUE;
     } else if (savedNode) {
-        const opts = $$('#nodeSelect option');
-        let found = false;
-        for (const opt of opts) { if (normalizeBaseUrl(opt.value) === normalizeBaseUrl(savedNode)) { opt.selected = true; found = true; break; } }
-        if (!found && els.customBaseInput) {
+        const qianyeLine = qianyeLineByUrl(savedNode);
+        if (qianyeLine) {
+            els.nodeSelect.value = PROVIDER_QIANYE;
+            if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLine.id;
+            localStorage.setItem('ai_node', PROVIDER_QIANYE);
+            localStorage.setItem('ai_qianye_line', qianyeLine.id);
+        } else if (normalizeBaseUrl(savedNode) === normalizeBaseUrl(LOCAL_NEWAPI_URL)) {
+            els.nodeSelect.value = PROVIDER_LOCAL_NEWAPI;
+            localStorage.setItem('ai_node', PROVIDER_LOCAL_NEWAPI);
+        } else if (els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = savedNode;
             localStorage.setItem('ai_custom_base', normalizeBaseUrl(savedNode));
             localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
         }
+    } else {
+        els.nodeSelect.value = PROVIDER_QIANYE;
     }
-    updateCustomBaseVisibility();
+    updateProviderFields();
     state.baseUrl = getActiveBaseUrl();
     updateResolutionLabel();
     ensureQueuePanel();

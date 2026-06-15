@@ -1061,6 +1061,21 @@ html.dark .pg {
     gap: 8px;
 }
 
+.provider-line-field {
+    gap: 6px;
+}
+
+.provider-line-hint {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+    border-radius: 10px;
+    color: var(--faint);
+    background: var(--surface-soft);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
 .field label,
 .settings-group > label,
 .settings-group > span,

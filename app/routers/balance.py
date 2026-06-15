@@ -13,6 +13,15 @@ router = APIRouter(prefix="/api/balance", tags=["balance"])
 
 NEWAPI_QUOTA_PER_USD = 500000
 
+BUILTIN_API_BASE_URLS = (
+    "https://newapi.qianqianye.com",
+    "https://newapi-hk.qianye.host",
+    "https://newapi-us-la-1.qianye.host",
+    "https://newapi-jp.qianye.host",
+    "127.0.0.1:3000",
+    "http://127.0.0.1:3000",
+)
+
 
 class BalanceOverviewRequest(BaseModel):
     access_token: str
@@ -60,6 +69,7 @@ def _allowed_base_urls() -> set[str]:
         newapi_base = _strip_api_suffix(get("newapi.base_url", ""))
         if newapi_base:
             allowed.add(newapi_base)
+    allowed.update(_strip_api_suffix(url) for url in BUILTIN_API_BASE_URLS)
     return allowed
 
 
