@@ -1,7 +1,7 @@
 """数据库管理 - 支持 SQLite / MySQL"""
 import aiosqlite
 from pathlib import Path
-from app.config import get
+from app.config import get, resolve_path
 
 _db_path: str = ""
 
@@ -11,7 +11,7 @@ def _db_type() -> str:
 def get_db_path() -> str:
     global _db_path
     if not _db_path:
-        _db_path = get("database.path", "./data/huitu.db")
+        _db_path = str(resolve_path(get("database.path", "./data/huitu.db")))
         Path(_db_path).parent.mkdir(parents=True, exist_ok=True)
     return _db_path
 

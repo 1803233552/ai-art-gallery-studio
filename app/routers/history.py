@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
 import aiohttp
-from app.config import get
+from app.config import get, resolve_path
 from app.database import get_db
 from app.routers.auth import verify_user_token
 
@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 
 def _storage() -> Path:
-    p = Path(get("history.storage_path", "./data/history_images"))
+    p = resolve_path(get("history.storage_path", "./data/history_images"))
     p.mkdir(parents=True, exist_ok=True)
     return p
 

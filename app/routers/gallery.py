@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
-from app.config import get
+from app.config import get, resolve_path
 from app.database import get_db
 from app.routers.auth import verify_newapi_token, is_admin
 
@@ -18,10 +18,12 @@ router = APIRouter(prefix="/api/gallery", tags=["gallery"])
 
 AVATAR_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
 BUILTIN_AVATAR_DIR = Path(__file__).resolve().parents[1] / "static" / "img" / "avatars"
-LEGACY_AVATAR_DIR = Path("data/touxiang")
+
+def _legacy_avatar_dir() -> Path:
+    return resolve_path("data/touxiang")
 
 def get_storage_path() -> Path:
-    p = Path(get("gallery.storage_path", "./gallery_images"))
+    p = resolve_path(get("gallery.storage_path", "./gallery_images"))
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -38,7 +40,7 @@ def _random_avatar(username: str = "") -> str:
     """基于用户名哈希从内置头像池确定性选取头像，保证同一用户始终分配同一头像"""
     files = []
     seen = set()
-    for avatar_dir in (BUILTIN_AVATAR_DIR, LEGACY_AVATAR_DIR):
+    for avatar_dir in (BUILTIN_AVATAR_DIR, _legacy_avatar_dir()):
         if not avatar_dir.exists():
             continue
         for f in sorted(avatar_dir.iterdir(), key=lambda p: p.name):
@@ -77,7 +79,7 @@ async def gen_avatar(name: str):
 async def get_avatar_file(filename: str):
     """获取内置默认头像文件（兼容旧 data/touxiang 目录）"""
     filepath = None
-    for avatar_dir in (BUILTIN_AVATAR_DIR, LEGACY_AVATAR_DIR):
+    for avatar_dir in (BUILTIN_AVATAR_DIR, _legacy_avatar_dir()):
         candidate = avatar_dir / filename
         if candidate.exists() and candidate.is_file():
             filepath = candidate

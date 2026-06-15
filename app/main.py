@@ -9,7 +9,7 @@ import asyncio
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from app.config import load_config, get
+from app.config import load_config, get, resolve_path
 from app.database import init_db
 from app.routers import pages, auth, gallery, api_proxy, history, balance
 
@@ -23,7 +23,7 @@ def setup_logging():
         return
     _logging_done = True
 
-    log_dir = Path(get("logging.dir", "./logs"))
+    log_dir = resolve_path(get("logging.dir", "./logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
     level_name = get("logging.level", "INFO").upper()
     keep_days = int(get("logging.keep_days", 30))

@@ -25,6 +25,16 @@
 }
 .pg-select:focus, .pg-input:focus, .pg-textarea:focus { border-color:var(--primary); }
 .pg-textarea { line-height:1.6; }
+.auth-input {
+    color: var(--text) !important;
+    background: color-mix(in srgb, var(--bg-card-solid) 92%, #fff 8%) !important;
+    -webkit-text-fill-color: var(--text);
+    caret-color: var(--primary);
+}
+.auth-input::placeholder {
+    color: var(--text-mute);
+    -webkit-text-fill-color: var(--text-mute);
+}
 .pg-select { cursor:pointer; appearance:none;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aeaeb2' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
     background-repeat:no-repeat; background-position:right 12px center; padding-right:32px;

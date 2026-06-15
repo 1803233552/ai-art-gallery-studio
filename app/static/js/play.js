@@ -2006,11 +2006,14 @@ function renderAllResults() {
     // 历史工具栏
     const toolbar = document.createElement('div');
     toolbar.className = 'r-toolbar';
+    const localDirButton = _localFileHistoryEnabled()
+        ? '<button class="r-open-local-dir" type="button" title="打开本机历史图片目录">📁 图片目录</button>'
+        : '';
     toolbar.innerHTML = `
-        <button class="r-open-local-dir" type="button" title="打开本机历史图片目录">📁 图片目录</button>
+        ${localDirButton}
         ${state.history.length ? `<button class="r-clean-expired" type="button" title="清理已失效图片元数据和残留缓存">🧹 清理失效${expiredCount ? ` (${expiredCount})` : ''}</button>` : ''}
         ${state.history.length ? '<button class="r-clear-all" type="button" title="清空所有绘图历史">🗑️ 清空历史</button>' : ''}`;
-    toolbar.querySelector('.r-open-local-dir').addEventListener('click', () => openLocalHistoryDir());
+    toolbar.querySelector('.r-open-local-dir')?.addEventListener('click', () => openLocalHistoryDir());
     toolbar.querySelector('.r-clean-expired')?.addEventListener('click', () => {
         const message = expiredCount
             ? `确定清理 ${expiredCount} 张已失效图片吗？会删除对应的历史占位和 IndexedDB/localStorage 残留，不影响仍可查看的图片。`
@@ -2452,20 +2455,23 @@ function _getTauriInvoke() {
 }
 
 async function openRegisterUrl(event) {
-    if (event) event.preventDefault();
     const invoke = _getTauriInvoke();
-    if (invoke) {
-        try {
-            await invoke('open_registration_url');
-            addLog('已在系统浏览器打开注册页面', 'success');
-            return;
-        } catch (err) {
-            addLog(`打开注册页面失败：${err.message || err}`, 'err');
-            return;
-        }
+    if (!invoke) return;
+    if (event) event.preventDefault();
+
+    try {
+        await invoke('open_registration_url');
+        addLog('已在系统浏览器打开注册页面', 'success');
+        return;
+    } catch (err) {
+        addLog(`打开注册页面失败：${err.message || err}`, 'err');
+        return;
     }
-    const opened = window.open(REGISTER_URL, '_blank', 'noopener,noreferrer');
-    if (!opened) addLog(`浏览器拦截了注册页面，请手动打开：${REGISTER_URL}`, 'warn');
+}
+
+function bindDesktopRegisterLink(link) {
+    if (!link || !_getTauriInvoke()) return;
+    link.addEventListener('click', openRegisterUrl);
 }
 
 function _blobToBase64(blob) {
@@ -3602,7 +3608,7 @@ async function renderUserPanel() {
             </div>
             <div class="auth-mode-hint">账号登录只用于历史/广场身份；生成仍使用下方供应商 API Key。</div>`;
         els.userInfo.querySelector('#playLoginBtn').addEventListener('click', showPlayLogin);
-        els.userInfo.querySelector('#playRegisterBtn').addEventListener('click', openRegisterUrl);
+        bindDesktopRegisterLink(els.userInfo.querySelector('#playRegisterBtn'));
         return;
     }
 
@@ -3648,11 +3654,11 @@ function showPlayLogin() {
         <div class="ann-body">
             <div class="field" style="margin-bottom:12px">
                 <label style="font-size:13px;color:var(--text-soft);display:block;margin-bottom:4px">用户名</label>
-                <input type="text" id="plUser" class="pg-input" placeholder="NewAPI 用户名" style="width:100%">
+                <input type="text" id="plUser" class="pg-input auth-input" placeholder="NewAPI 用户名" style="width:100%">
             </div>
             <div class="field">
                 <label style="font-size:13px;color:var(--text-soft);display:block;margin-bottom:4px">密码</label>
-                <input type="password" id="plPass" class="pg-input" placeholder="密码" style="width:100%">
+                <input type="password" id="plPass" class="pg-input auth-input" placeholder="密码" style="width:100%">
             </div>
             <p id="plErr" style="color:#ff3b30;font-size:13px;margin-top:8px" hidden></p>
         </div>
@@ -3669,7 +3675,7 @@ function showPlayLogin() {
     const close = () => overlay.remove();
     overlay.querySelector('#plClose').onclick = close;
     overlay.querySelector('#plCancelBtn').onclick = close;
-    overlay.querySelector('#plRegisterBtn').addEventListener('click', openRegisterUrl);
+    bindDesktopRegisterLink(overlay.querySelector('#plRegisterBtn'));
     overlay.querySelector('#plPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
     async function doLogin() {

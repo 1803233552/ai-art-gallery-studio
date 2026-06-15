@@ -8,6 +8,22 @@ from typing import Any
 _config: dict = {}
 _config_path: str = ""
 
+def get_config_dir() -> Path:
+    """返回当前配置文件所在目录。"""
+    if not _config_path:
+        load_config()
+    return Path(_config_path).resolve().parent
+
+def resolve_path(value: str | os.PathLike[str], default: str | os.PathLike[str] | None = None) -> Path:
+    """将配置里的路径解析为绝对路径；相对路径基于配置文件所在目录。"""
+    raw = value or default
+    if raw is None:
+        raw = "."
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return get_config_dir() / path
+
 def load_config(config_path: str | None = None) -> dict:
     """加载 YAML 配置文件，首次启动自动生成 secret_key"""
     global _config, _config_path
@@ -16,7 +32,7 @@ def load_config(config_path: str | None = None) -> dict:
             "AI_STUDIO_CONFIG",
             str(Path(__file__).parent.parent / "config.yaml")
         )
-    _config_path = config_path
+    _config_path = str(Path(config_path).expanduser().resolve())
     with open(config_path, "r", encoding="utf-8") as f:
         _config = yaml.safe_load(f) or {}
 
