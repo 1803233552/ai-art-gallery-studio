@@ -1,7 +1,8 @@
 """桌面版后端入口。
 
 该入口由 Tauri sidecar 启动：
-- 将运行目录切到用户数据目录，避免把日志/数据库写进安装目录；
+- 优先将运行目录切到安装目录，让图片/数据库/日志落在安装目录；
+- 如果安装目录不可写，则自动回退到用户数据目录；
 - 首次启动复制 config.desktop.yaml 为用户可写的 config.yaml；
 - 启动 FastAPI/uvicorn，只监听本机地址。
 """
@@ -12,6 +13,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -25,6 +27,66 @@ def _app_data_dir() -> Path:
         return Path.home() / "Library" / "Application Support" / app_name
     base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
     return Path(base) / app_name
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return left.absolute() == right.absolute()
+
+
+def _is_writable_dir(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix=".write-test-", dir=path, delete=True):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _copy_missing(src: Path, dst: Path) -> None:
+    if not src.exists():
+        return
+    if src.is_file():
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        return
+    for child in src.rglob("*"):
+        target = dst / child.relative_to(src)
+        if child.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
+def _migrate_legacy_appdata(target_dir: Path) -> None:
+    """把旧版 AppData 数据复制到新的安装目录数据根。已存在文件不覆盖。"""
+    legacy_dir = _app_data_dir()
+    if not legacy_dir.exists() or _same_path(legacy_dir, target_dir):
+        return
+
+    for name in ("config.yaml", "data"):
+        try:
+            _copy_missing(legacy_dir / name, target_dir / name)
+        except OSError:
+            pass
+
+
+def _desktop_data_dir(preferred_dir: str | None) -> Path:
+    """优先使用安装目录；不可写时回退 AppData。"""
+    if preferred_dir:
+        candidate = Path(preferred_dir).expanduser().resolve()
+        if _is_writable_dir(candidate):
+            _migrate_legacy_appdata(candidate)
+            return candidate
+
+    fallback = _app_data_dir()
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
 def _bundled_path(relative: str) -> Path:
@@ -107,9 +169,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="AI Art Gallery Studio desktop backend")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18100)
+    parser.add_argument("--data-dir", default=os.environ.get("AI_STUDIO_DESKTOP_DATA_DIR"))
     args = parser.parse_args()
 
-    data_dir = _app_data_dir()
+    data_dir = _desktop_data_dir(args.data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "data").mkdir(exist_ok=True)
     (data_dir / "logs").mkdir(exist_ok=True)
@@ -117,8 +180,9 @@ def main() -> None:
     config_path = _ensure_config(data_dir)
     os.environ["AI_STUDIO_CONFIG"] = str(config_path)
     os.environ["AI_STUDIO_DESKTOP"] = "1"
+    os.environ["AI_STUDIO_DESKTOP_DATA_DIR"] = str(data_dir)
 
-    # 让相对路径配置（./logs、./data/*.db 等）都落在用户数据目录。
+    # 让相对路径配置（./logs、./data/*.db、./data/history_images 等）都落在桌面数据目录。
     os.chdir(data_dir)
 
     import uvicorn

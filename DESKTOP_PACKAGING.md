@@ -31,17 +31,31 @@ src-tauri/target/release/bundle/nsis/
 
 ## 用户数据目录
 
-桌面版不会把数据库和日志写入安装目录。Windows 下默认目录：
+桌面版优先把配置、数据库、日志和本机图片历史写入安装目录。Windows 下通常类似：
+
+```text
+<安装目录>\
+```
+
+其中本机图片历史默认位于：
+
+```text
+<安装目录>\data\history_images\_local\output\
+```
+
+如果安装目录不可写（例如安装到受保护的 `Program Files`），会自动回退到用户数据目录：
 
 ```text
 %APPDATA%\AI Art Gallery Studio\
 ```
 
-首次启动会生成：
+首次启动会生成或迁移：
 
 - `config.yaml`
-- `data/ai-studio.db`
-- `logs/app.log`
+- `data/`
+- `logs/`
+
+旧版本已写入 `%APPDATA%\AI Art Gallery Studio\` 的 `config.yaml` 和 `data/` 会在安装目录可写时自动复制到安装目录；已存在文件不会覆盖。
 
 ## 注意
 

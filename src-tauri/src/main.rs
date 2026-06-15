@@ -54,6 +54,12 @@ fn stop_backend_process(process: &BackendProcess) {
     }
 }
 
+fn install_data_dir() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+}
+
 fn desktop_data_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -375,12 +381,17 @@ fn main() {
             let backend_port = find_free_port();
             persist_backend_port(backend_port);
             let backend_port_arg = backend_port.to_string();
-            let sidecar = app.shell().sidecar("ai-studio-backend")?.args([
-                "--host",
-                BACKEND_HOST,
-                "--port",
-                &backend_port_arg,
-            ]);
+            let mut sidecar_args = vec![
+                "--host".to_string(),
+                BACKEND_HOST.to_string(),
+                "--port".to_string(),
+                backend_port_arg,
+            ];
+            if let Some(data_dir) = install_data_dir() {
+                sidecar_args.push("--data-dir".to_string());
+                sidecar_args.push(data_dir.display().to_string());
+            }
+            let sidecar = app.shell().sidecar("ai-studio-backend")?.args(sidecar_args);
             let (mut rx, child) = sidecar.spawn()?;
 
             *app.state::<BackendProcess>().0.lock().unwrap() = Some(child);
