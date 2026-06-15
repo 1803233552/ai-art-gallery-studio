@@ -48,6 +48,20 @@ bash manage.sh status
 bash manage.sh stop
 ```
 
+## 桌面应用构建
+
+构建 Tauri 桌面应用安装包：
+
+```bash
+npm run desktop:build
+```
+
+构建完成后，Windows 安装包输出在：
+
+```text
+src-tauri/target/release/bundle/nsis/AI 创意工坊_1.0.0_x64-setup.exe
+```
+
 ## 配置
 
 所有运行时配置都在 `config.yaml` 中。首次使用请先复制示例配置：
