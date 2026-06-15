@@ -1912,14 +1912,22 @@ let _expandTarget = null; // { model, date } — 生成时自动展开的目标
 
 function renderAllResults() {
     els.resultArea.innerHTML = '';
+    const expiredCount = _countExpiredHistoryImages();
 
     // 历史工具栏
     const toolbar = document.createElement('div');
     toolbar.className = 'r-toolbar';
     toolbar.innerHTML = `
         <button class="r-open-local-dir" type="button" title="打开本机历史图片目录">📁 图片目录</button>
+        ${state.history.length ? `<button class="r-clean-expired" type="button" title="清理已失效图片元数据和残留缓存">🧹 清理失效${expiredCount ? ` (${expiredCount})` : ''}</button>` : ''}
         ${state.history.length ? '<button class="r-clear-all" type="button" title="清空所有绘图历史">🗑️ 清空历史</button>' : ''}`;
     toolbar.querySelector('.r-open-local-dir').addEventListener('click', () => openLocalHistoryDir());
+    toolbar.querySelector('.r-clean-expired')?.addEventListener('click', () => {
+        const message = expiredCount
+            ? `确定清理 ${expiredCount} 张已失效图片吗？会删除对应的历史占位和 IndexedDB/localStorage 残留，不影响仍可查看的图片。`
+            : '当前没有显示为过期的图片。是否仍整理当前用户历史缓存，删除未被历史引用的 IndexedDB/localStorage 残留？';
+        _confirmDialog(message, () => cleanupExpiredHistoryData());
+    });
     toolbar.querySelector('.r-clear-all')?.addEventListener('click', () => {
         _confirmDialog('确定要清空所有绘图历史记录吗？此操作不可撤销。', () => clearAllHistory());
     });
@@ -2742,6 +2750,109 @@ function _removeFallbackKeys(keys) {
         });
         if (changed) localStorage.setItem(_lsKey('fallback'), JSON.stringify(fallback));
     } catch {}
+}
+
+function _isExpiredHistoryImage(img) {
+    return !img || img._expired || (!img.b64_json && !img.url);
+}
+
+function _countExpiredHistoryImages() {
+    return state.history.reduce((sum, batch) => {
+        return sum + ((batch.images || []).filter(_isExpiredHistoryImage).length);
+    }, 0);
+}
+
+async function _idbDeleteCurrentUserOrphanKeys(keepKeys) {
+    const prefix = `${_currentUid()}_`;
+    const toDelete = [];
+    try {
+        const db = await _openDB();
+        const tx = db.transaction(IDB_STORE, 'readonly');
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.getAllKeys();
+        const keys = await new Promise((resolve, reject) => {
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
+        db.close();
+        keys.forEach(key => {
+            const k = String(key || '');
+            if (k.startsWith(prefix) && !keepKeys.has(k)) toDelete.push(k);
+        });
+    } catch {}
+    if (toDelete.length) await _idbDeleteKeys(toDelete);
+    return toDelete.length;
+}
+
+function _pruneFallbackToKeys(keepKeys) {
+    let removed = 0;
+    try {
+        const raw = localStorage.getItem(_lsKey('fallback'));
+        if (!raw) return 0;
+        const fallback = JSON.parse(raw);
+        Object.keys(fallback).forEach(key => {
+            if (!keepKeys.has(key)) {
+                delete fallback[key];
+                removed += 1;
+            }
+        });
+        if (Object.keys(fallback).length) {
+            localStorage.setItem(_lsKey('fallback'), JSON.stringify(fallback));
+        } else {
+            localStorage.removeItem(_lsKey('fallback'));
+        }
+    } catch {}
+    return removed;
+}
+
+async function cleanupExpiredHistoryData() {
+    const keysToDelete = [];
+    let removedImages = 0;
+    let removedBatches = 0;
+    const cleaned = [];
+
+    for (const batch of state.history) {
+        const images = Array.isArray(batch.images) ? batch.images : [];
+        const keepImages = [];
+        images.forEach((img, index) => {
+            if (_isExpiredHistoryImage(img)) {
+                keysToDelete.push(_imgKey(batch.id, index));
+                removedImages += 1;
+            } else {
+                keepImages.push(img);
+            }
+        });
+
+        if (!keepImages.length) {
+            keysToDelete.push(..._historyKeysForBatch(batch));
+            removedBatches += 1;
+            continue;
+        }
+
+        keepImages.forEach(img => {
+            if (img && !img._server) img._saved = false;
+        });
+        batch.images = keepImages;
+        cleaned.push(batch);
+    }
+
+    state.history = cleaned;
+    await _idbDeleteKeys([...new Set(keysToDelete)]);
+    _removeFallbackKeys(keysToDelete);
+    if (removedImages || removedBatches) await _saveToLocal();
+
+    const keepKeys = new Set();
+    state.history.forEach(batch => _historyKeysForBatch(batch).forEach(key => keepKeys.add(key)));
+    const orphanIdb = await _idbDeleteCurrentUserOrphanKeys(keepKeys);
+    const orphanFallback = _pruneFallbackToKeys(keepKeys);
+
+    _lastHistoryLoadStats = null;
+    renderAllResults();
+    if (removedImages || orphanIdb || orphanFallback) {
+        addLog(`已清理历史数据：删除 ${removedImages} 张过期占位、${removedBatches} 个空批次，额外清理 IndexedDB 孤儿 ${orphanIdb} 条、fallback 孤儿 ${orphanFallback} 条`, 'success');
+    } else {
+        addLog('没有发现需要清理的失效历史或孤儿缓存');
+    }
 }
 
 async function deleteHistoryBatchLocalData(batches) {

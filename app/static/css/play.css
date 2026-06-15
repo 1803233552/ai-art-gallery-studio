@@ -221,12 +221,14 @@
 /* ---- History toolbar & date controls ---- */
 .r-toolbar { display:flex; justify-content:flex-end; gap:8px; margin-bottom:8px; }
 .r-open-local-dir,
+.r-clean-expired,
 .r-clear-all {
     padding:6px 14px; border:1px solid var(--border); border-radius:10px;
     background:transparent; color:var(--text-soft); cursor:pointer; font-size:13px;
     transition:all .2s;
 }
 .r-open-local-dir:hover { background:var(--bg-card-solid); color:var(--text); }
+.r-clean-expired:hover { background:#d97706; color:#fff; border-color:#d97706; }
 .r-clear-all:hover { background:#ff3b30; color:#fff; border-color:#ff3b30; }
 .rg-date-head {
     display:flex; align-items:center; justify-content:space-between;
@@ -1685,6 +1687,7 @@ html.dark .pg {
 }
 
 .r-open-local-dir,
+.r-clean-expired,
 .r-clear-all {
     min-height: 32px;
     border: 1px solid var(--line);
@@ -1701,6 +1704,12 @@ html.dark .pg {
     border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
     color: var(--accent);
     background: var(--accent-soft);
+}
+
+.r-clean-expired:hover {
+    border-color: #d97706;
+    color: #fff;
+    background: #d97706;
 }
 
 .r-grid {
