@@ -1,7 +1,11 @@
 """后端代理 API 路由（仅 request_mode=backend 时启用）"""
 import asyncio
+import ipaddress
 import json
 import logging
+import re
+from urllib.parse import urlparse
+
 import aiohttp
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response, JSONResponse
@@ -14,9 +18,34 @@ log = logging.getLogger(__name__)
 def _normalize_target(target: str) -> str:
     """允许填写 127.0.0.1:3000 这类无协议 Base URL。"""
     target = (target or "").strip().rstrip("/")
-    if target and not target.startswith(("http://", "https://")):
+    if target and "://" not in target:
         target = "http://" + target
     return target
+
+
+def _is_allowed_user_host(hostname: str) -> bool:
+    """允许公网域名/公网 IP，阻止显式本机/内网地址。"""
+    host = (hostname or "").strip().strip("[]").lower()
+    if not host or host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
+        return False
+
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        if re.fullmatch(r"(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+))*", host):
+            return False
+        # 域名交给 HTTP 客户端解析；部分用户环境会把公网域名解析为代理/TUN 保留地址，
+        # 这里不按本机 DNS 结果误杀。重定向已禁用，避免公网入口 30x 跳转到内网。
+        return True
+
+
+def _validate_user_target(target: str) -> None:
+    """校验浏览器传入的 X-Target-Base，避免 SSRF。"""
+    parsed = urlparse(target)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(400, "自定义 Base URL 仅支持 http/https 公网地址")
+    if not _is_allowed_user_host(parsed.hostname):
+        raise HTTPException(400, "后端代理模式下，自定义 Base URL 不允许使用本地、内网或链路本地地址")
 
 
 def _is_retryable_client_error(error: aiohttp.ClientError) -> bool:
@@ -84,7 +113,8 @@ async def proxy_request(path: str, request: Request):
         raise HTTPException(403, "后端代理模式未开启")
 
     # 获取目标 base_url
-    target = request.headers.get("X-Target-Base", "")
+    user_target = request.headers.get("X-Target-Base", "")
+    target = user_target
     nodes = get("api_nodes", {}) or {}
     default_target = list(nodes.values())[0] if nodes else ""
 
@@ -101,6 +131,8 @@ async def proxy_request(path: str, request: Request):
     target = _normalize_target(target)
     if not target:
         raise HTTPException(400, "未指定目标节点")
+    if user_target:
+        _validate_user_target(target)
 
     target_url = f"{target}/{path}"
 
@@ -131,6 +163,7 @@ async def proxy_request(path: str, request: Request):
                     "headers": forward_headers,
                     "timeout": timeout,
                     "compress": False,
+                    "allow_redirects": False,
                 }
                 if body:
                     kwargs["data"] = body
