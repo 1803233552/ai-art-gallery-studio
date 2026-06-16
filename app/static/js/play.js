@@ -260,7 +260,7 @@ const QIANYE_LINES = [
         hint: '优化线路很贵，有魔法的请选择国际线路，把机会留给需要的人~感谢支持。选择优化线路则不要开启魔法，避免减速带效果~',
     },
 ];
-const DEFAULT_QIANYE_LINE_ID = 'cf';
+const DEFAULT_QIANYE_LINE_ID = 'hk';
 const LOCAL_NEWAPI_URL = '127.0.0.1:3000';
 
 // ============================================================
