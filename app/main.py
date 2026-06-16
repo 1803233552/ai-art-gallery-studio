@@ -1,6 +1,7 @@
 """FastAPI 入口"""
 import logging
 import os
+import re
 import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
@@ -13,10 +14,39 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from app.config import load_config, get, resolve_path
 from app.database import init_db
-from app.routers import pages, auth, gallery, api_proxy, history, balance
+from app.routers import pages, auth, gallery, api_proxy, history, balance, desktop_secret
 
 
 _logging_done = False
+
+
+_SENSITIVE_REPLACEMENTS = (
+    (re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s'\"),;]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)((?:api[_-]?key|access[_-]?token|token|password|passwd|secret)\s*[:=]\s*)['\"]?[^\s'\"),;&]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)((?:api[_-]?key|access[_-]?token|token|ticket|password|secret)=)[^\s&'\"]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(Bearer\s+)[A-Za-z0-9._~+\-/=]+"), r"\1[REDACTED]"),
+)
+
+
+def _redact_sensitive(value):
+    if isinstance(value, str):
+        redacted = value
+        for pattern, repl in _SENSITIVE_REPLACEMENTS:
+            redacted = pattern.sub(repl, redacted)
+        return redacted
+    return value
+
+
+class RedactSensitiveFilter(logging.Filter):
+    """从日志消息中脱敏 token、API Key、密码等敏感字段。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _redact_sensitive(record.msg)
+        if isinstance(record.args, dict):
+            record.args = {key: _redact_sensitive(value) for key, value in record.args.items()}
+        elif isinstance(record.args, tuple):
+            record.args = tuple(_redact_sensitive(value) for value in record.args)
+        return True
 
 
 class SizeAndTimeRotatingFileHandler(TimedRotatingFileHandler):
@@ -134,11 +164,13 @@ def setup_logging():
     file_handler.suffix = "%Y-%m-%d.log"
     file_handler.setLevel(level)
     file_handler.setFormatter(fmt)
+    file_handler.addFilter(RedactSensitiveFilter())
 
     # 控制台 handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(fmt)
+    console_handler.addFilter(RedactSensitiveFilter())
 
     # 配置根 logger（先清理已有 handler，防止 reload 等场景下累积重复）
     root = logging.getLogger()
@@ -182,6 +214,7 @@ def create_app() -> FastAPI:
     app.include_router(api_proxy.router)
     app.include_router(history.router)
     app.include_router(balance.router)
+    app.include_router(desktop_secret.router)
 
     @app.on_event("startup")
     async def startup():

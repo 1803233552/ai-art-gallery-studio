@@ -2,6 +2,7 @@
 import base64
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -59,6 +60,92 @@ def _gen_filename(index: int, prefix: str = "img", suffix: str = ".png") -> str:
     rnd = random.randint(1000, 9999)
     safe_suffix = suffix if suffix.startswith(".") else f".{suffix}"
     return f"{ts}_{rnd}_{prefix}_{index}{safe_suffix}"
+
+
+def _image_ticket(username: str, filename: str, ttl: int = 600) -> str:
+    """签发短期图片访问票据，避免把长效登录 token 放进图片 URL。"""
+    exp = int(time.time()) + ttl
+    data = f"{username}\n{Path(filename).name}\n{exp}"
+    secret = get("secret_key", "fallback_key")
+    sig = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()[:32]
+    raw = json.dumps({"u": username, "f": Path(filename).name, "e": exp, "s": sig}, ensure_ascii=False)
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _verify_image_ticket(ticket: str, username: str, filename: str) -> bool:
+    try:
+        padded = ticket + "=" * (-len(ticket) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        safe_file = Path(filename).name
+        if payload.get("u") != username or payload.get("f") != safe_file:
+            return False
+        exp = int(payload.get("e", 0))
+        if exp < time.time():
+            return False
+        data = f"{username}\n{safe_file}\n{exp}"
+        secret = get("secret_key", "fallback_key")
+        expected = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()[:32]
+        return hmac.compare_digest(str(payload.get("s", "")), expected)
+    except Exception:
+        return False
+
+
+def _local_ticket(owner_key: str, target: str, ttl: int = 600) -> str:
+    exp = int(time.time()) + ttl
+    data = f"{owner_key}\n{target}\n{exp}"
+    secret = get("secret_key", "fallback_key")
+    sig = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()[:32]
+    raw = json.dumps({"o": owner_key, "t": target, "e": exp, "s": sig}, ensure_ascii=False)
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _verify_local_ticket(ticket: str, owner_key: str, target: str) -> bool:
+    try:
+        padded = ticket + "=" * (-len(ticket) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        if payload.get("o") != owner_key or payload.get("t") != target:
+            return False
+        exp = int(payload.get("e", 0))
+        if exp < time.time():
+            return False
+        data = f"{owner_key}\n{target}\n{exp}"
+        secret = get("secret_key", "fallback_key")
+        expected = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()[:32]
+        return hmac.compare_digest(str(payload.get("s", "")), expected)
+    except Exception:
+        return False
+
+
+def _with_local_tickets(items: list[dict], owner_key: str) -> list[dict]:
+    result = []
+    for item in items:
+        batch = dict(item)
+        batch_id = str(batch.get("id", ""))
+        images = []
+        for img in batch.get("images") or []:
+            if not isinstance(img, dict):
+                images.append(img)
+                continue
+            entry = dict(img)
+            if entry.get("path"):
+                target = f"file:{entry['path']}"
+            else:
+                target = f"batch:{batch_id}:{Path(str(entry.get('filename', ''))).name}"
+            entry["ticket"] = _local_ticket(owner_key, target)
+            images.append(entry)
+        refs = []
+        for ref in batch.get("ref_images") or []:
+            if not isinstance(ref, dict):
+                refs.append(ref)
+                continue
+            entry = dict(ref)
+            if entry.get("path"):
+                entry["ticket"] = _local_ticket(owner_key, f"file:{entry['path']}")
+            refs.append(entry)
+        batch["images"] = images
+        batch["ref_images"] = refs
+        result.append(batch)
+    return result
 
 
 def _safe_segment(value: str, fallback: str = "unknown") -> str:
@@ -481,7 +568,8 @@ async def save_local_batch(request: Request):
 async def list_local_history(request: Request):
     _require_local_history(request)
     owner_key = await _local_owner_key(request)
-    return {"success": True, "data": _local_filter_owner(_read_local_manifest(), owner_key)}
+    items = _local_filter_owner(_read_local_manifest(), owner_key)
+    return {"success": True, "data": _with_local_tickets(items, owner_key)}
 
 
 @router.post("/local/open-dir")
@@ -506,6 +594,9 @@ async def open_local_history_dir(request: Request):
 async def get_local_history_image(batch_id: str, filename: str, request: Request):
     _require_local_history(request)
     owner_key = await _local_owner_key(request)
+    target = f"batch:{batch_id}:{Path(filename).name}"
+    if not _verify_local_ticket(request.query_params.get("ticket", ""), owner_key, target):
+        raise HTTPException(403, "无权访问")
     items = _local_filter_owner(_read_local_manifest(), owner_key)
     batch = next((item for item in items if item.get("id") == batch_id), None)
     if not batch:
@@ -521,6 +612,10 @@ async def get_local_history_image(batch_id: str, filename: str, request: Request
 async def get_local_history_file(path: str, request: Request):
     _require_local_history(request)
     owner_key = await _local_owner_key(request)
+    normalized_path = str(path or "").replace("\\", "/")
+    target = f"file:{normalized_path}"
+    if not _verify_local_ticket(request.query_params.get("ticket", ""), owner_key, target):
+        raise HTTPException(403, "无权访问")
     items = _local_filter_owner(_read_local_manifest(), owner_key)
     filepath = _local_path_from_relative(path)
     rel_path = _local_relative_path(filepath)
@@ -721,7 +816,9 @@ async def list_history(request: Request):
                     "time": d["batch_time"], "images": []
                 }
             batches[bid]["images"].append({
-                "index": d["image_index"], "filename": d["filename"]
+                "index": d["image_index"],
+                "filename": d["filename"],
+                "ticket": _image_ticket(user.get("username", str(user_id)), d["filename"]),
             })
         result = list(batches.values())
         return {"success": True, "data": result}
@@ -732,8 +829,8 @@ async def list_history(request: Request):
 # ---- 获取单张图片 ----
 @router.get("/image/{username_path}/{filename}")
 async def get_history_image(username_path: str, filename: str, request: Request):
-    user = await _auth(request)
-    if user.get("username", "") != username_path:
+    ticket = request.query_params.get("ticket", "")
+    if not ticket or not _verify_image_ticket(ticket, username_path, filename):
         raise HTTPException(403, "无权访问")
     filepath = _user_dir(username_path) / filename
     if not filepath.exists():

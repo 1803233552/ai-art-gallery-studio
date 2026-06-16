@@ -411,6 +411,48 @@ function getToken() {
     return localStorage.getItem('token') || '';
 }
 
+async function loadSavedApiKey() {
+    const legacyKey = localStorage.getItem('ai_key') || '';
+    try {
+        const resp = await fetch('/api/desktop/secret/api-key');
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.success && data.enabled) {
+                if (data.api_key) {
+                    localStorage.removeItem('ai_key');
+                    return data.api_key;
+                }
+                if (legacyKey) {
+                    await saveApiKeySecurely(legacyKey);
+                    localStorage.removeItem('ai_key');
+                    return legacyKey;
+                }
+                return '';
+            }
+        }
+    } catch {}
+    return legacyKey;
+}
+
+async function saveApiKeySecurely(apiKey) {
+    try {
+        const resp = await fetch('/api/desktop/secret/api-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey || '' }),
+        });
+        if (resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            if (data.success && data.enabled) {
+                localStorage.removeItem('ai_key');
+                return true;
+            }
+        }
+    } catch {}
+    localStorage.setItem('ai_key', apiKey || '');
+    return false;
+}
+
 function formatElapsed(ms) {
     const s = Math.floor(ms / 1000);
     if (s < 60) return `${s}s`;
@@ -971,7 +1013,7 @@ async function connectApi() {
         setStatus('idle');
         addLog(`连接成功，共 ${state.models.length} 个可用模型`, 'success');
 
-        localStorage.setItem('ai_key', apiKey);
+        await saveApiKeySecurely(apiKey);
         saveActiveNode(baseUrl);
         if (getBalanceToken() && isBalancePanelEnabled()) refreshBalance();
 
@@ -3017,22 +3059,21 @@ function _localHistoryHeaders(extra) {
     return headers;
 }
 
-function _localHistoryTokenQuery() {
-    const token = getToken();
-    return token ? `?token=${encodeURIComponent(token)}` : '';
+function _ticketQuery(ticket) {
+    return ticket ? `?ticket=${encodeURIComponent(ticket)}` : '';
 }
 
-function _localImageUrl(batchId, filename) {
-    return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}${_localHistoryTokenQuery()}`;
+function _localImageUrl(batchId, filename, ticket) {
+    return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}${_ticketQuery(ticket)}`;
 }
 
-function _localFileUrl(path) {
-    return `/api/history/local/file/${String(path || '').split('/').map(encodeURIComponent).join('/')}${_localHistoryTokenQuery()}`;
+function _localFileUrl(path, ticket) {
+    return `/api/history/local/file/${String(path || '').split('/').map(encodeURIComponent).join('/')}${_ticketQuery(ticket)}`;
 }
 
 function _localManifestImageUrl(batchId, item) {
-    if (item && item.path) return _localFileUrl(item.path);
-    return _localImageUrl(batchId, item?.filename || item || '');
+    if (item && item.path) return _localFileUrl(item.path, item.ticket || '');
+    return _localImageUrl(batchId, item?.filename || item || '', item?.ticket || '');
 }
 
 let _lastHistoryLoadStats = null;
@@ -3254,8 +3295,7 @@ async function _loadFromServer() {
             refImages: [],
             images: (b.images || []).map(img => ({
                 b64_json: '',
-                // <img> 标签无法携带 header，通过 ?token= 鉴权
-                url: `/api/history/image/${encodeURIComponent(uname)}/${img.filename}?token=${encodeURIComponent(token)}`,
+                url: `/api/history/image/${encodeURIComponent(uname)}/${encodeURIComponent(img.filename)}?ticket=${encodeURIComponent(img.ticket || '')}`,
                 _saved: true,
                 _server: true,
             })),
@@ -3772,7 +3812,7 @@ async function init() {
     }
 
     // 恢复 API Key / 模型供应商
-    const savedKey = localStorage.getItem('ai_key');
+    const savedKey = await loadSavedApiKey();
     const savedNode = localStorage.getItem('ai_node');
     const savedCustomBase = localStorage.getItem('ai_custom_base') || '';
     const savedQianyeLine = localStorage.getItem('ai_qianye_line') || DEFAULT_QIANYE_LINE_ID;
