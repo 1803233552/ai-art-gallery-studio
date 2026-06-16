@@ -1193,8 +1193,9 @@ async function applyGenerationParams(batch) {
         if (qianyeLine) {
             els.nodeSelect.value = PROVIDER_QIANYE;
             if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLine.id;
-        } else if (normalized === normalizeBaseUrl(LOCAL_NEWAPI_URL)) {
-            els.nodeSelect.value = PROVIDER_LOCAL_NEWAPI;
+        } else if (normalized === normalizeBaseUrl(LOCAL_NEWAPI_URL) && els.customBaseInput) {
+            els.nodeSelect.value = CUSTOM_NODE_VALUE;
+            els.customBaseInput.value = normalized;
         } else if (els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = normalized;
@@ -3789,11 +3790,10 @@ function showPlayLogin() {
 // 初始化
 // ============================================================
 async function init() {
-    // 渲染模型供应商：浅夜の梦中转站 / 本机 NewAPI / 自定义 Base URL
+    // 渲染模型供应商：浅夜の梦中转站 / 自定义 Base URL
     els.nodeSelect.innerHTML = '';
     [
         [PROVIDER_QIANYE, '浅夜の梦中转站'],
-        [PROVIDER_LOCAL_NEWAPI, '本机 NewAPI'],
         [CUSTOM_NODE_VALUE, '自定义 Base URL'],
     ].forEach(([value, label]) => {
         const opt = document.createElement('option');
@@ -3824,8 +3824,11 @@ async function init() {
     if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLineById(savedQianyeLine)?.id || DEFAULT_QIANYE_LINE_ID;
     if (savedNode === PROVIDER_QIANYE) {
         els.nodeSelect.value = PROVIDER_QIANYE;
-    } else if (savedNode === PROVIDER_LOCAL_NEWAPI) {
-        els.nodeSelect.value = PROVIDER_LOCAL_NEWAPI;
+    } else if (savedNode === PROVIDER_LOCAL_NEWAPI && els.customBaseInput) {
+        els.nodeSelect.value = CUSTOM_NODE_VALUE;
+        els.customBaseInput.value = normalizeBaseUrl(LOCAL_NEWAPI_URL);
+        localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
+        localStorage.setItem('ai_custom_base', normalizeBaseUrl(LOCAL_NEWAPI_URL));
     } else if (savedNode === CUSTOM_NODE_VALUE) {
         els.nodeSelect.value = CUSTOM_NODE_VALUE;
     } else if (savedNode) {
@@ -3835,9 +3838,11 @@ async function init() {
             if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLine.id;
             localStorage.setItem('ai_node', PROVIDER_QIANYE);
             localStorage.setItem('ai_qianye_line', qianyeLine.id);
-        } else if (normalizeBaseUrl(savedNode) === normalizeBaseUrl(LOCAL_NEWAPI_URL)) {
-            els.nodeSelect.value = PROVIDER_LOCAL_NEWAPI;
-            localStorage.setItem('ai_node', PROVIDER_LOCAL_NEWAPI);
+        } else if (normalizeBaseUrl(savedNode) === normalizeBaseUrl(LOCAL_NEWAPI_URL) && els.customBaseInput) {
+            els.nodeSelect.value = CUSTOM_NODE_VALUE;
+            els.customBaseInput.value = normalizeBaseUrl(LOCAL_NEWAPI_URL);
+            localStorage.setItem('ai_custom_base', normalizeBaseUrl(LOCAL_NEWAPI_URL));
+            localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
         } else if (els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = savedNode;
