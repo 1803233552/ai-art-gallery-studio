@@ -75,7 +75,7 @@ history:
   max_images_per_user: 500
 
 newapi:
-  base_url: ""
+  base_url: "https://newapi.qianye.host"
   admin_user_ids:
     - 1
 

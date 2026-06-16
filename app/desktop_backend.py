@@ -98,7 +98,7 @@ def _bundled_path(relative: str) -> Path:
 def _ensure_config(data_dir: Path) -> Path:
     config_path = data_dir / "config.yaml"
     if config_path.exists():
-        _ensure_desktop_history_defaults(config_path)
+        _ensure_desktop_defaults(config_path)
         return config_path
 
     template = _bundled_path("config.desktop.yaml")
@@ -108,8 +108,36 @@ def _ensure_config(data_dir: Path) -> Path:
         raise FileNotFoundError("找不到桌面版默认配置 config.desktop.yaml")
 
     shutil.copyfile(template, config_path)
-    _ensure_desktop_history_defaults(config_path)
+    _ensure_desktop_defaults(config_path)
     return config_path
+
+
+def _ensure_desktop_defaults(config_path: Path) -> None:
+    """给旧版桌面配置补齐默认项。"""
+    _ensure_desktop_history_defaults(config_path)
+    _ensure_desktop_newapi_default(config_path)
+
+
+def _ensure_desktop_newapi_default(config_path: Path) -> None:
+    """旧桌面配置里 newapi.base_url 为空时，补成浅夜 NewAPI。"""
+    try:
+        content = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    pattern = r"(?m)^(\s*base_url\s*:\s*)[\"']?\s*[\"']?\s*$"
+    new_content = re.sub(
+        pattern,
+        r'\1"https://newapi.qianye.host"',
+        content,
+        count=1,
+    )
+    if new_content == content:
+        return
+    try:
+        config_path.write_text(new_content, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _ensure_desktop_history_defaults(config_path: Path) -> None:
