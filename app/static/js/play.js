@@ -316,6 +316,10 @@ function isLocalNewApiSelected() {
     return currentProvider() === PROVIDER_LOCAL_NEWAPI;
 }
 
+function canUseCustomBaseUrls() {
+    return Boolean(_getTauriInvoke());
+}
+
 function getActiveBaseUrl(ctx = null) {
     if (ctx?.baseUrl) return normalizeBaseUrl(ctx.baseUrl);
     if (isQianyeProviderSelected()) {
@@ -332,7 +336,7 @@ function getActiveBaseUrl(ctx = null) {
 }
 
 function isCustomNodeSelected() {
-    return els.nodeSelect?.value === CUSTOM_NODE_VALUE;
+    return canUseCustomBaseUrls() && els.nodeSelect?.value === CUSTOM_NODE_VALUE;
 }
 
 function updateProviderFields() {
@@ -1193,16 +1197,16 @@ async function applyGenerationParams(batch) {
         if (qianyeLine) {
             els.nodeSelect.value = PROVIDER_QIANYE;
             if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLine.id;
-        } else if (normalized === normalizeBaseUrl(LOCAL_NEWAPI_URL) && els.customBaseInput) {
+        } else if (canUseCustomBaseUrls() && normalized === normalizeBaseUrl(LOCAL_NEWAPI_URL) && els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = normalized;
-        } else if (els.customBaseInput) {
+        } else if (canUseCustomBaseUrls() && els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = normalized;
         }
         updateProviderFields();
-        state.baseUrl = normalized;
-        saveActiveNode(normalized);
+        state.baseUrl = getActiveBaseUrl();
+        saveActiveNode(state.baseUrl);
     }
 
     const canUseRefImages = !model || getModelCfg(model).ref_image !== false;
@@ -3790,12 +3794,11 @@ function showPlayLogin() {
 // 初始化
 // ============================================================
 async function init() {
-    // 渲染模型供应商：浅夜の梦中转站 / 自定义 Base URL
+    // 渲染模型供应商：网页版仅浅夜の梦中转站；Tauri 打包版额外显示自定义 Base URL
     els.nodeSelect.innerHTML = '';
-    [
-        [PROVIDER_QIANYE, '浅夜の梦中转站'],
-        [CUSTOM_NODE_VALUE, '自定义 Base URL'],
-    ].forEach(([value, label]) => {
+    const providerOptions = [[PROVIDER_QIANYE, '浅夜の梦中转站']];
+    if (canUseCustomBaseUrls()) providerOptions.push([CUSTOM_NODE_VALUE, '自定义 Base URL']);
+    providerOptions.forEach(([value, label]) => {
         const opt = document.createElement('option');
         opt.value = value;
         opt.textContent = label;
@@ -3824,12 +3827,12 @@ async function init() {
     if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLineById(savedQianyeLine)?.id || DEFAULT_QIANYE_LINE_ID;
     if (savedNode === PROVIDER_QIANYE) {
         els.nodeSelect.value = PROVIDER_QIANYE;
-    } else if (savedNode === PROVIDER_LOCAL_NEWAPI && els.customBaseInput) {
+    } else if (canUseCustomBaseUrls() && savedNode === PROVIDER_LOCAL_NEWAPI && els.customBaseInput) {
         els.nodeSelect.value = CUSTOM_NODE_VALUE;
         els.customBaseInput.value = normalizeBaseUrl(LOCAL_NEWAPI_URL);
         localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
         localStorage.setItem('ai_custom_base', normalizeBaseUrl(LOCAL_NEWAPI_URL));
-    } else if (savedNode === CUSTOM_NODE_VALUE) {
+    } else if (canUseCustomBaseUrls() && savedNode === CUSTOM_NODE_VALUE) {
         els.nodeSelect.value = CUSTOM_NODE_VALUE;
     } else if (savedNode) {
         const qianyeLine = qianyeLineByUrl(savedNode);
@@ -3838,16 +3841,19 @@ async function init() {
             if (els.qianyeLineSelect) els.qianyeLineSelect.value = qianyeLine.id;
             localStorage.setItem('ai_node', PROVIDER_QIANYE);
             localStorage.setItem('ai_qianye_line', qianyeLine.id);
-        } else if (normalizeBaseUrl(savedNode) === normalizeBaseUrl(LOCAL_NEWAPI_URL) && els.customBaseInput) {
+        } else if (canUseCustomBaseUrls() && normalizeBaseUrl(savedNode) === normalizeBaseUrl(LOCAL_NEWAPI_URL) && els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = normalizeBaseUrl(LOCAL_NEWAPI_URL);
             localStorage.setItem('ai_custom_base', normalizeBaseUrl(LOCAL_NEWAPI_URL));
             localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
-        } else if (els.customBaseInput) {
+        } else if (canUseCustomBaseUrls() && els.customBaseInput) {
             els.nodeSelect.value = CUSTOM_NODE_VALUE;
             els.customBaseInput.value = savedNode;
             localStorage.setItem('ai_custom_base', normalizeBaseUrl(savedNode));
             localStorage.setItem('ai_node', CUSTOM_NODE_VALUE);
+        } else {
+            els.nodeSelect.value = PROVIDER_QIANYE;
+            localStorage.setItem('ai_node', PROVIDER_QIANYE);
         }
     } else {
         els.nodeSelect.value = PROVIDER_QIANYE;
