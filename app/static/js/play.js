@@ -3010,12 +3010,24 @@ function _localFileHistoryEnabled() {
     return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
 }
 
+function _localHistoryHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+}
+
+function _localHistoryTokenQuery() {
+    const token = getToken();
+    return token ? `?token=${encodeURIComponent(token)}` : '';
+}
+
 function _localImageUrl(batchId, filename) {
-    return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}`;
+    return `/api/history/local/image/${encodeURIComponent(batchId)}/${encodeURIComponent(filename)}${_localHistoryTokenQuery()}`;
 }
 
 function _localFileUrl(path) {
-    return `/api/history/local/file/${String(path || '').split('/').map(encodeURIComponent).join('/')}`;
+    return `/api/history/local/file/${String(path || '').split('/').map(encodeURIComponent).join('/')}${_localHistoryTokenQuery()}`;
 }
 
 function _localManifestImageUrl(batchId, item) {
@@ -3031,7 +3043,7 @@ async function _saveToLocalFiles(batch) {
     try {
         const resp = await fetch('/api/history/local/save', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: _localHistoryHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 batch_id: batch.id,
                 model: batch.model,
@@ -3059,7 +3071,7 @@ async function _saveToLocalFiles(batch) {
 async function _loadFromLocalFiles() {
     if (!_localFileHistoryEnabled()) return [];
     try {
-        const resp = await fetch('/api/history/local/list');
+        const resp = await fetch('/api/history/local/list', { headers: _localHistoryHeaders() });
         const data = await resp.json();
         if (!data.success) return [];
         return (data.data || []).map(b => ({
@@ -3174,17 +3186,17 @@ async function _migrateLegacyHttpImagesToLocalFiles() {
 
 async function _deleteLocalFileBatch(batchId) {
     if (!_localFileHistoryEnabled()) return;
-    try { await fetch(`/api/history/local/batch/${encodeURIComponent(batchId)}`, { method: 'DELETE' }); } catch {}
+    try { await fetch(`/api/history/local/batch/${encodeURIComponent(batchId)}`, { method: 'DELETE', headers: _localHistoryHeaders() }); } catch {}
 }
 
 async function _deleteLocalFileImage(batchId, imgIndex) {
     if (!_localFileHistoryEnabled()) return;
-    try { await fetch(`/api/history/local/image/${encodeURIComponent(batchId)}/${imgIndex}`, { method: 'DELETE' }); } catch {}
+    try { await fetch(`/api/history/local/image/${encodeURIComponent(batchId)}/${imgIndex}`, { method: 'DELETE', headers: _localHistoryHeaders() }); } catch {}
 }
 
 async function _clearLocalFileHistory() {
     if (!_localFileHistoryEnabled()) return;
-    try { await fetch('/api/history/local/clear', { method: 'DELETE' }); } catch {}
+    try { await fetch('/api/history/local/clear', { method: 'DELETE', headers: _localHistoryHeaders() }); } catch {}
 }
 
 async function openLocalHistoryDir() {
@@ -3193,7 +3205,7 @@ async function openLocalHistoryDir() {
         return;
     }
     try {
-        const resp = await fetch('/api/history/local/open-dir', { method: 'POST' });
+        const resp = await fetch('/api/history/local/open-dir', { method: 'POST', headers: _localHistoryHeaders() });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || data.success === false) {
             throw new Error(data.detail || data.message || `HTTP ${resp.status}`);

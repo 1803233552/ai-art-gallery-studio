@@ -105,6 +105,9 @@ async def login(req: LoginRequest):
 
     # 3. 封禁检查
     user_id = user_info.get("id", 0) if user_info else 0
+    if not user_id:
+        return {"success": False, "message": "登录失败：无法获取 NewAPI 用户 ID，请稍后重试"}
+
     db = await get_db()
     try:
         ban_row = await db.execute_fetchall(

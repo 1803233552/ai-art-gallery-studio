@@ -91,6 +91,26 @@ def _local_manifest_path() -> Path:
     return _local_root() / "history.json"
 
 
+async def _local_owner_key(request: Request) -> str:
+    """本机历史的用户隔离 key。未登录为 guest，登录用户按 NewAPI id 隔离。"""
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        token = request.query_params.get("token", "")
+    if not token:
+        return "guest"
+    user = await verify_user_token(token)
+    user_id = user.get("id") if user else None
+    return f"user:{user_id}" if user_id else "guest"
+
+
+def _local_item_owner(item: dict) -> str:
+    return str(item.get("owner_key") or "guest")
+
+
+def _local_filter_owner(items: list[dict], owner_key: str) -> list[dict]:
+    return [item for item in items if isinstance(item, dict) and _local_item_owner(item) == owner_key]
+
+
 def _local_batch_dir(batch_id: str) -> Path:
     """旧版 batch 目录。保留用于兼容历史记录读取/删除。"""
     path = _local_root() / _safe_segment(batch_id, "batch")
@@ -391,6 +411,7 @@ async def _auth(request: Request) -> dict:
 async def save_local_batch(request: Request):
     """把本机历史图片落盘到 history.storage_path。保存输出图和输入参考图。"""
     _require_local_history(request)
+    owner_key = await _local_owner_key(request)
     body = await request.json()
     batch_id = body.get("batch_id", "")
     model = body.get("model", "")
@@ -428,10 +449,11 @@ async def save_local_batch(request: Request):
         raise HTTPException(400, "没有可保存的图片")
 
     existing_items = _read_local_manifest()
-    replaced_items = [item for item in existing_items if item.get("id") == batch_id]
-    items = [item for item in existing_items if item.get("id") != batch_id]
+    replaced_items = [item for item in existing_items if item.get("id") == batch_id and _local_item_owner(item) == owner_key]
+    items = [item for item in existing_items if not (item.get("id") == batch_id and _local_item_owner(item) == owner_key)]
     items.insert(0, {
         "id": batch_id,
+        "owner_key": owner_key,
         "model": model,
         "text": prompt,
         "time": batch_time,
@@ -442,8 +464,10 @@ async def save_local_batch(request: Request):
     })
 
     max_batches = int(get("history.local_max_batches", 200))
-    removed = items[max_batches:]
-    items = items[:max_batches]
+    owner_items = [item for item in items if _local_item_owner(item) == owner_key]
+    removed = owner_items[max_batches:]
+    removed_ids = {id(item) for item in removed}
+    items = [item for item in items if id(item) not in removed_ids]
     for old in replaced_items:
         _delete_local_batch_files(old, items)
     for old in removed:
@@ -456,7 +480,8 @@ async def save_local_batch(request: Request):
 @router.get("/local/list")
 async def list_local_history(request: Request):
     _require_local_history(request)
-    return {"success": True, "data": _read_local_manifest()}
+    owner_key = await _local_owner_key(request)
+    return {"success": True, "data": _local_filter_owner(_read_local_manifest(), owner_key)}
 
 
 @router.post("/local/open-dir")
@@ -480,6 +505,11 @@ async def open_local_history_dir(request: Request):
 @router.get("/local/image/{batch_id}/{filename}")
 async def get_local_history_image(batch_id: str, filename: str, request: Request):
     _require_local_history(request)
+    owner_key = await _local_owner_key(request)
+    items = _local_filter_owner(_read_local_manifest(), owner_key)
+    batch = next((item for item in items if item.get("id") == batch_id), None)
+    if not batch:
+        raise HTTPException(404, "图片不存在")
     safe_name = Path(filename).name
     filepath = _local_root() / _safe_segment(batch_id, "batch") / safe_name
     if not filepath.exists() or not filepath.is_file():
@@ -490,7 +520,17 @@ async def get_local_history_image(batch_id: str, filename: str, request: Request
 @router.get("/local/file/{path:path}")
 async def get_local_history_file(path: str, request: Request):
     _require_local_history(request)
+    owner_key = await _local_owner_key(request)
+    items = _local_filter_owner(_read_local_manifest(), owner_key)
     filepath = _local_path_from_relative(path)
+    rel_path = _local_relative_path(filepath)
+    allowed = any(
+        any(isinstance(img, dict) and img.get("path") == rel_path for img in item.get("images") or [])
+        or any(isinstance(ref, dict) and ref.get("path") == rel_path for ref in item.get("ref_images") or [])
+        for item in items
+    )
+    if not allowed:
+        raise HTTPException(404, "图片不存在")
     if not filepath.exists() or not filepath.is_file():
         raise HTTPException(404, "图片不存在")
     return FileResponse(filepath)
@@ -499,8 +539,9 @@ async def get_local_history_file(path: str, request: Request):
 @router.delete("/local/image/{batch_id}/{image_index}")
 async def delete_local_history_image(batch_id: str, image_index: int, request: Request):
     _require_local_history(request)
+    owner_key = await _local_owner_key(request)
     items = _read_local_manifest()
-    batch = next((item for item in items if item.get("id") == batch_id), None)
+    batch = next((item for item in items if item.get("id") == batch_id and _local_item_owner(item) == owner_key), None)
     if not batch:
         return {"success": True}
 
@@ -520,9 +561,10 @@ async def delete_local_history_image(batch_id: str, image_index: int, request: R
 @router.delete("/local/batch/{batch_id}")
 async def delete_local_batch(batch_id: str, request: Request):
     _require_local_history(request)
+    owner_key = await _local_owner_key(request)
     old_items = _read_local_manifest()
-    batch = next((item for item in old_items if item.get("id") == batch_id), None)
-    items = [item for item in old_items if item.get("id") != batch_id]
+    batch = next((item for item in old_items if item.get("id") == batch_id and _local_item_owner(item) == owner_key), None)
+    items = [item for item in old_items if not (item.get("id") == batch_id and _local_item_owner(item) == owner_key)]
     if batch:
         _delete_local_batch_files(batch, items)
     _write_local_manifest(items)
@@ -532,15 +574,13 @@ async def delete_local_batch(batch_id: str, request: Request):
 @router.delete("/local/clear")
 async def clear_local_history(request: Request):
     _require_local_history(request)
-    root = _local_root()
-    for child in root.iterdir():
-        if child.name == "history.json":
-            continue
-        if child.is_dir():
-            shutil.rmtree(child, ignore_errors=True)
-        else:
-            child.unlink(missing_ok=True)
-    _write_local_manifest([])
+    owner_key = await _local_owner_key(request)
+    old_items = _read_local_manifest()
+    removed = [item for item in old_items if _local_item_owner(item) == owner_key]
+    items = [item for item in old_items if _local_item_owner(item) != owner_key]
+    for batch in removed:
+        _delete_local_batch_files(batch, items)
+    _write_local_manifest(items)
     return {"success": True}
 
 
