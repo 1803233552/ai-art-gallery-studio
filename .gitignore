@@ -22,6 +22,7 @@ src-tauri/gen/
 build/desktop/
 
 # Local-only configuration
+config.yaml
 config.local.yaml
 *.local.yaml
 

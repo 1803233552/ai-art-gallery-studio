@@ -32,6 +32,12 @@ def load_config(config_path: str | None = None) -> dict:
             "AI_STUDIO_CONFIG",
             str(Path(__file__).parent.parent / "config.yaml")
         )
+    config_file = Path(config_path).expanduser()
+    if not config_file.exists() and not os.environ.get("AI_STUDIO_CONFIG"):
+        example = Path(__file__).parent.parent / "config_example.yaml"
+        if example.exists():
+            config_file.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    config_path = str(config_file)
     _config_path = str(Path(config_path).expanduser().resolve())
     with open(config_path, "r", encoding="utf-8") as f:
         _config = yaml.safe_load(f) or {}

@@ -164,7 +164,7 @@ admin:
   # 生产环境建议改成不容易猜到的路径，如 /my-secret-admin-2025
   path: "/admin"
 
-  username: "xiaoqian"          # 管理员用户名
+  username: "change-me"          # 管理员用户名
   password: "change-me"       # 管理员密码（请务必修改！）
 
 
