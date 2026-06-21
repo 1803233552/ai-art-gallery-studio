@@ -377,19 +377,29 @@ function getPixelSize(ratio = state.ratio, resolution = state.resolution) {
     return SIZE_MAP[resolution]?.[ratio] || SIZE_MAP['1k']['1:1'];
 }
 
-function getImageOptions(ctx = state) {
+function isGptImageModel(modelName) {
+    return /^gpt-image-2(?:-|$)/i.test(String(modelName || '').trim());
+}
+
+function getImageOptions(ctx = state, purpose = 'generation') {
+    const modelName = ctx.model || ctx.selectedModel || state.selectedModel || '';
     const outputFormat = ctx.outputFormat || 'png';
+    const useModernGptImageParams = isGptImageModel(modelName);
     const body = {
         size: getPixelSize(ctx.ratio, ctx.resolution),
-        resolution: ctx.resolution || '1k',
         quality: ctx.quality || 'auto',
         background: ctx.background || 'auto',
         moderation: ctx.moderation || 'auto',
-        // 优先让上游返回图片 URL，避免几 MB 的 base64 JSON 走长连接返回时更容易触发 TLS 断链。
-        // 前端已有 URL 图片下载/缓存逻辑；若上游不支持该字段，通常会忽略。
-        response_format: 'url',
         output_format: outputFormat,
     };
+    if (!useModernGptImageParams) {
+        // 优先让上游返回图片 URL，避免几 MB 的 base64 JSON 走长连接返回时更容易触发 TLS 断链。
+        // 前端已有 URL 图片下载/缓存逻辑；若上游不支持该字段，通常会忽略。
+        body.response_format = 'url';
+    }
+    if (!useModernGptImageParams) {
+        body.resolution = ctx.resolution || '1k';
+    }
     if ((outputFormat === 'jpeg' || outputFormat === 'webp') && Number.isFinite(ctx.outputCompression)) {
         body.output_compression = ctx.outputCompression;
     }
@@ -481,7 +491,11 @@ async function safeJson(resp) {
         if (ct.includes('json')) {
             try {
                 const j = await resp.json();
-                if (j.error) throw new Error(parseError(j));
+                if (j.error) {
+                    const err = new Error(parseError(j));
+                    err.apiError = j;
+                    throw err;
+                }
             } catch (e) {
                 if (e instanceof SyntaxError === false) throw e;
             }
@@ -539,34 +553,52 @@ function parseError(data) {
     return ERROR_MAP.unknown;
 }
 
+function extractUnsupportedParameterName(err) {
+    const raw = err?.apiError || err;
+    const code = raw?.error?.code || raw?.code || raw?.error?.type || '';
+    const msg = raw?.error?.message || raw?.message || err?.message || err || '';
+    const text = `${code} ${msg}`;
+    const match = String(text).match(/(?:unknown|invalid|unsupported)\s+parameter\s*:?\s*['"]?([a-z0-9_]+)['"]?/i)
+        || String(text).match(/unexpected\s+field\s*:?\s*['"]?([a-z0-9_]+)['"]?/i)
+        || String(text).match(/unrecognized\s+request\s+argument\s*:?\s*['"]?([a-z0-9_]+)['"]?/i);
+    return match?.[1]?.toLowerCase() || '';
+}
+
 function isUnsupportedResponseFormatError(err) {
     const msg = String(err?.message || err || '').toLowerCase();
+    const unsupportedKey = extractUnsupportedParameterName(err);
     return msg.includes('response_format')
         || msg.includes('response format')
-        || msg.includes('unknown parameter')
-        || msg.includes('invalid parameter')
-        || msg.includes('unsupported parameter')
-        || msg.includes('unexpected field')
-        || msg.includes('unrecognized request argument');
+        || unsupportedKey === 'response_format';
 }
 
 async function requestJsonWithUrlFallback(endpoint, fetchOptions, bodyOrForm, isMultipart = false) {
     const resp = await fetch(endpoint, fetchOptions);
+    let retryField = '';
     try {
         return await safeJson(resp);
     } catch (err) {
-        if (!isUnsupportedResponseFormatError(err)) throw err;
-        addLog('当前节点不支持 response_format=url，已自动降级为默认返回格式重试', 'warn');
+        retryField = extractUnsupportedParameterName(err);
+        const canRetry = retryField && (isMultipart
+            ? bodyOrForm.has(retryField)
+            : Object.prototype.hasOwnProperty.call(bodyOrForm, retryField));
+        if (retryField === 'response_format') {
+            addLog('当前节点不支持 response_format=url，已自动降级为默认返回格式重试', 'warn');
+        } else if (canRetry) {
+            addLog(`当前节点不支持参数 ${retryField}，已自动移除后重试`, 'warn');
+        } else {
+            throw err;
+        }
     }
 
     if (isMultipart) {
-        bodyOrForm.delete('response_format');
+        bodyOrForm.delete(retryField);
         const retryResp = await fetch(endpoint, { ...fetchOptions, body: bodyOrForm });
         return safeJson(retryResp);
     }
 
     const retryBody = { ...bodyOrForm };
-    delete retryBody.response_format;
+    delete retryBody[retryField];
     const retryResp = await fetch(endpoint, {
         ...fetchOptions,
         body: JSON.stringify(retryBody),
@@ -608,19 +640,24 @@ async function requestNativeImageEdit(prompt, count, imageOptions, ctx = state) 
 }
 
 async function requestNativeImageEditWithUrlFallback(prompt, count, ctx = state) {
-    const imageOptions = getImageOptions(ctx);
+    const imageOptions = getImageOptions(ctx, 'edit');
     const data = await requestNativeImageEdit(prompt, count, imageOptions, ctx);
-    if (!data?.error || !isUnsupportedResponseFormatError(parseError(data))) return data;
+    const retryField = extractUnsupportedParameterName(data);
+    if (!data?.error || !retryField || !Object.prototype.hasOwnProperty.call(imageOptions, retryField)) return data;
 
-    addLog('当前节点不支持 response_format=url，原生请求已自动降级为默认返回格式重试', 'warn');
+    if (retryField === 'response_format') {
+        addLog('当前节点不支持 response_format=url，原生请求已自动降级为默认返回格式重试', 'warn');
+    } else {
+        addLog(`当前节点不支持参数 ${retryField}，原生请求已自动移除后重试`, 'warn');
+    }
     const retryOptions = { ...imageOptions };
-    delete retryOptions.response_format;
+    delete retryOptions[retryField];
     return requestNativeImageEdit(prompt, count, retryOptions, ctx);
 }
 
 async function requestDirectImageEditWithUrlFallback(prompt, count, ctx = state) {
     const endpoint = `${getActiveBaseUrl(ctx)}/v1/images/edits`;
-    const imageOptions = getImageOptions(ctx);
+    const imageOptions = getImageOptions(ctx, 'edit');
     const makeForm = (options) => {
         const form = new FormData();
         form.append('model', ctx.model || ctx.selectedModel);
@@ -639,15 +676,22 @@ async function requestDirectImageEditWithUrlFallback(prompt, count, ctx = state)
         headers: { 'Authorization': `Bearer ${ctx.apiKey || state.apiKey}` },
         body: makeForm(imageOptions),
     });
+    let retryField = '';
     try {
         return await safeJson(resp);
     } catch (err) {
-        if (!isUnsupportedResponseFormatError(err)) throw err;
-        addLog('当前节点不支持 response_format=url，直连请求已自动降级为默认返回格式重试', 'warn');
+        retryField = extractUnsupportedParameterName(err);
+        if (retryField === 'response_format') {
+            addLog('当前节点不支持 response_format=url，直连请求已自动降级为默认返回格式重试', 'warn');
+        } else if (retryField && Object.prototype.hasOwnProperty.call(imageOptions, retryField)) {
+            addLog(`当前节点不支持参数 ${retryField}，直连请求已自动移除后重试`, 'warn');
+        } else {
+            throw err;
+        }
     }
 
     const retryOptions = { ...imageOptions };
-    delete retryOptions.response_format;
+    delete retryOptions[retryField];
     const retryResp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${ctx.apiKey || state.apiKey}` },
@@ -1473,14 +1517,15 @@ async function runGenerationTask(task) {
 async function genStandard(prompt, count, mode, ctx = state) {
     const endpoint = mode === 'backend' ? '/api/proxy/v1/images/generations' : `${getActiveBaseUrl(ctx)}/v1/images/generations`;
     const headers = buildHeaders(mode, ctx);
-    const imageOptions = getImageOptions(ctx);
+    const imageOptions = getImageOptions(ctx, 'generation');
     const body = {
         model: ctx.model || ctx.selectedModel,
         prompt,
         n: count,
         ...imageOptions,
     };
-    addLog(`请求生成 ${count} 张图片，size=${imageOptions.size}，resolution=${imageOptions.resolution}`);
+    const resolutionText = imageOptions.resolution ? `，resolution=${imageOptions.resolution}` : '';
+    addLog(`请求生成 ${count} 张图片，size=${imageOptions.size}${resolutionText}`);
     const data = await requestJsonWithUrlFallback(endpoint, {
         method: 'POST',
         headers,
@@ -1567,7 +1612,7 @@ async function genWithRefImagesOnce(prompt, count, mode, label = '', ctx = state
 
     const endpoint = mode === 'backend' ? '/api/proxy/v1/images/edits' : `${getActiveBaseUrl(ctx)}/v1/images/edits`;
     const headers = buildHeadersMultipart(ctx);
-    const imageOptions = getImageOptions(ctx);
+    const imageOptions = getImageOptions(ctx, 'edit');
     const form = new FormData();
     form.append('model', ctx.model || ctx.selectedModel);
     form.append('prompt', prompt);

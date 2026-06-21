@@ -103,13 +103,13 @@
   "prompt": "A quiet anime-style girl reading beside a rainy window",
   "n": 1,
   "size": "1536x864",
-  "resolution": "1k",
   "quality": "auto",
   "background": "auto",
   "moderation": "auto",
   "output_format": "png"
 }</pre>
             <p class="note">
+                                当前兼容接口中，<code>gpt-image-2</code> 文生图与图生图都以 <code>size</code> 为准，不再依赖 <code>resolution</code>。
                 <code>quality</code> 可选 <code>auto</code>、<code>low</code>、<code>medium</code>、<code>high</code>。
                 <code>output_format</code> 可选 <code>png</code>、<code>jpeg</code>、<code>webp</code>。
                 当格式是 <code>jpeg</code> 或 <code>webp</code> 时，可额外传 <code>output_compression</code>，范围 0-100。
@@ -126,10 +126,9 @@
   -F "image=@reference.png" \
   -F "n=1" \
   -F "size=1024x1024" \
-  -F "resolution=1k" \
   -F "quality=high" \
   -F "output_format=png"</pre>
-            <p class="note">多张参考图时重复传 <code>image</code> 字段。工作台最多保留 4 张参考图，并会在浏览器端压缩到适合上传的大小。</p>
+                        <p class="note">多张参考图时重复传 <code>image</code> 字段。工作台最多保留 4 张参考图，并会在浏览器端压缩到适合上传的大小；当前兼容接口中图生图以 <code>size</code> 为准，不再依赖 <code>resolution</code>。</p>
         </section>
 
         <section class="card">
